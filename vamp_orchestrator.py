@@ -50,6 +50,7 @@ from datetime import datetime, timezone
 from html import escape as _he
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
+import math
 from urllib.parse import urlparse
 
 from rich.columns import Columns
@@ -80,7 +81,7 @@ from vampsec_report import (
 # Constantes
 # ---------------------------------------------------------------------------
 
-VERSION   = "1.0"
+VERSION   = "2.0"
 TOOL_NAME = "vamp-orchestrator"
 AUTHOR    = "© VampSecure Studios — VampSecure Labs Security Research Division"
 
@@ -121,77 +122,101 @@ STATUS_ICON: Dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 VSL_TOOLS: Dict[str, Dict] = {
-    "recon":   {
+    "recon":    {
         "script":    "vamp_passive_recon.py",
         "prefix":    "RECON",
         "needs":     ["domain"],
         "json_flag": "--json",
     },
-    "ssl":     {
+    "ssl":      {
         "script":    "vamp_ssl_audit.py",
         "prefix":    "SSL",
         "needs":     ["host"],
         "json_flag": "--json",
     },
-    "http":    {
+    "http":     {
         "script":    "vamp_http_audit.py",
         "prefix":    "HTTP",
         "needs":     ["url"],
         "json_flag": "--json",
     },
-    "wp":      {
+    "wp":       {
         "script":    "vamp_wp2shell_audit.py",
         "prefix":    "WP",
         "needs":     ["url"],
         "json_flag": "-o",
     },
-    "secrets": {
+    "secrets":  {
         "script":    "vamp_secrets_scanner.py",
         "prefix":    "SEC",
         "needs":     ["path"],
         "json_flag": "-o",
     },
-    "jwt":     {
+    "jwt":      {
         "script":    "vamp_jwt_audit.py",
         "prefix":    "JWT",
         "needs":     ["token"],
         "json_flag": "--json",
     },
-    "mail":    {
+    "mail":     {
         "script":    "vamp_mail_audit.py",
         "prefix":    "MAIL",
         "needs":     ["domain"],
         "json_flag": "--json",
     },
-    "docker":  {
+    "docker":   {
         "script":    "vamp_docker_audit.py",
         "prefix":    "DOCK",
         "needs":     [],
         "json_flag": "--json",
     },
-    "logs":    {
-        "script":    "vamp_log_hunter.py",
-        "prefix":    "LOG",
+    "forensic": {
+        "script":    "vamp_log_analyzer.py",
+        "prefix":    "FORA",
         "needs":     ["log_dir"],
-        "json_flag": "--json",
+        "json_flag": "-o",
     },
-    "cloud":   {
+    "cloud":    {
         "script":    "vamp_cloud_enum.py",
         "prefix":    "CLOUD",
         "needs":     ["domain"],
         "json_flag": "--json",
     },
-    "fort":    {
+    "fort":     {
         "script":    "vamp_forticheck.py",
         "prefix":    "FTC",
         "needs":     ["host"],
         "json_flag": "-o",
     },
-    "cve":     {
+    "cve":      {
         "script":    "vamp_cve_oracle.py",
         "prefix":    "RBVM",
         "needs":     ["cve"],
         "json_flag": "-o",
+    },
+    "takeover": {
+        "script":    "vamp_subdomain_takeover.py",
+        "prefix":    "SDT",
+        "needs":     ["domain"],
+        "json_flag": "--json",
+    },
+    "k8s":      {
+        "script":    "vamp_k8s_audit.py",
+        "prefix":    "K8S",
+        "needs":     [],
+        "json_flag": "--json",
+    },
+    "entropy":  {
+        "script":    "vamp_entropy_watch.py",
+        "prefix":    "ENT",
+        "needs":     ["path"],
+        "json_flag": "--json",
+    },
+    "llm":      {
+        "script":    "vamp_llm_probe.py",
+        "prefix":    "LLM",
+        "needs":     ["llm_endpoint"],
+        "json_flag": "--json",
     },
 }
 
@@ -230,13 +255,15 @@ class ToolRun:
 @dataclass
 class OrchestratorResult:
     """Resultado global de la orquestación completa."""
-    target_domain: Optional[str]
-    target_url:    Optional[str]
-    target_host:   Optional[str]
-    tools_run:     List[ToolRun]
-    all_findings:  List[dict]
-    risk_score:    int
-    duration:      float
+    target_domain:       Optional[str]
+    target_url:          Optional[str]
+    target_host:         Optional[str]
+    target_k8s_context:  Optional[str]
+    target_llm_endpoint: Optional[str]
+    tools_run:           List[ToolRun]
+    all_findings:        List[dict]
+    risk_score:          int
+    duration:            float
 
 
 # ---------------------------------------------------------------------------
@@ -556,6 +583,81 @@ def _extract_logs(data: dict, prefix: str) -> List[dict]:
     return out
 
 
+def _extract_forensic(data: dict, prefix: str) -> List[dict]:
+    """
+    Extrae hallazgos del JSON de vamp_log_analyzer (analizador forense).
+
+    Esquema fuente:
+      findings[].{fid, severity, title, description, ips[], events,
+                  first_seen, last_seen, recommendation, mitre_tactic, mitre_technique}
+    """
+    out: List[dict] = []
+    idx = 1
+    for f in data.get("findings", []):
+        ips = f.get("ips", [])
+        affected = ", ".join(str(ip) for ip in ips[:5]) if ips else "—"
+        events   = f.get("events", 0)
+        fs, ls   = f.get("first_seen", ""), f.get("last_seen", "")
+        evidence = f"Eventos: {events}"
+        if fs:
+            evidence += f" | Primera detección: {str(fs)[:19]}"
+        if ls and ls != fs:
+            evidence += f" | Última detección: {str(ls)[:19]}"
+
+        tactic    = f.get("mitre_tactic", "")
+        technique = f.get("mitre_technique", "")
+        tags = ["forensic", "logs"]
+        if tactic:
+            tags.append(tactic.lower().replace(" ", "-"))
+
+        out.append(_make_finding(
+            prefix, idx,
+            severity    = f.get("severity", "INFO"),
+            title       = f.get("title", "Evento forense detectado"),
+            description = f.get("description", ""),
+            evidence    = evidence,
+            affected    = affected,
+            remediation = f.get("recommendation", f.get("remediation", "")),
+            tags        = tags,
+            references  = ([f"MITRE ATT&CK: {technique}"] if technique else []),
+        ))
+        # Preservar el fid original y datos ATT&CK en el hallazgo normalizado
+        out[-1]["fid"]             = f.get("fid", out[-1]["id"])
+        out[-1]["mitre_tactic"]    = tactic
+        out[-1]["mitre_technique"] = technique
+        out[-1]["event_count"]     = events
+        idx += 1
+    return out
+
+
+def _extract_entropy(data: dict, prefix: str) -> List[dict]:
+    """
+    Extrae hallazgos del JSON de vamp_entropy_watch.
+
+    Esquema fuente:
+      findings[].{severity, title, description, path, entropy_score,
+                  file_type, evidence, remediation}
+    """
+    out: List[dict] = []
+    idx = 1
+    for f in data.get("findings", []):
+        path    = f.get("path", f.get("file", "—"))
+        entropy = f.get("entropy_score", f.get("entropy", ""))
+        ev_extra = f" | Entropía Shannon: {entropy:.4f}" if isinstance(entropy, float) else ""
+        out.append(_make_finding(
+            prefix, idx,
+            severity    = f.get("severity", "HIGH"),
+            title       = f.get("title", f.get("name", "Alta entropía detectada")),
+            description = f.get("description", ""),
+            evidence    = f"{f.get('evidence', path)}{ev_extra}",
+            affected    = path,
+            remediation = f.get("remediation", "Revisar el fichero; puede contener datos cifrados o ransomware."),
+            tags        = ["entropy", f.get("file_type", "")],
+        ))
+        idx += 1
+    return out
+
+
 def _extract_fort(data: dict, prefix: str) -> List[dict]:
     """
     Extrae hallazgos del JSON de vamp_forticheck.
@@ -687,18 +789,22 @@ def _extract_generic(data: dict, prefix: str) -> List[dict]:
 
 # Mapa de extractores por nombre de herramienta
 _EXTRACTORS: Dict[str, Callable[[dict, str], List[dict]]] = {
-    "recon":   _extract_recon,
-    "ssl":     lambda d, p: _extract_ssl_http(d, p, "ssl"),
-    "http":    lambda d, p: _extract_ssl_http(d, p, "http"),
-    "wp":      _extract_wp,
-    "secrets": _extract_secrets,
-    "jwt":     _extract_jwt,
-    "mail":    _extract_mail,
-    "docker":  _extract_docker,
-    "logs":    _extract_logs,
-    "cloud":   _extract_generic,
-    "fort":    _extract_fort,
-    "cve":     _extract_cve,
+    "recon":    _extract_recon,
+    "ssl":      lambda d, p: _extract_ssl_http(d, p, "ssl"),
+    "http":     lambda d, p: _extract_ssl_http(d, p, "http"),
+    "wp":       _extract_wp,
+    "secrets":  _extract_secrets,
+    "jwt":      _extract_jwt,
+    "mail":     _extract_mail,
+    "docker":   _extract_docker,
+    "forensic": _extract_forensic,
+    "cloud":    _extract_generic,
+    "fort":     _extract_fort,
+    "cve":      _extract_cve,
+    "takeover": _extract_generic,
+    "k8s":      _extract_generic,
+    "entropy":  _extract_entropy,
+    "llm":      _extract_generic,
 }
 
 
@@ -749,24 +855,28 @@ def auto_select_tools(args: argparse.Namespace,
     Determina qué herramientas ejecutar en función de los objetivos proporcionados.
 
     Lógica:
-      · --domain  → recon, ssl (desde dominio), http, wp, mail, cloud
-      · --url     → http, wp; ssl y recon si no hay --host/--domain
-      · --host    → ssl, fort
-      · --path    → secrets
-      · --jwt     → jwt
-      · --log-dir → logs
-      · Docker accesible → docker (siempre que esté disponible)
+      · --domain       → recon, ssl (desde dominio), http, wp, mail, cloud, takeover
+      · --url          → http, wp; ssl y recon si no hay --host/--domain
+      · --host         → ssl, fort
+      · --path         → secrets, entropy
+      · --jwt          → jwt
+      · --log-dir      → forensic (vamp_log_analyzer, análisis forense completo)
+      · --llm-endpoint → llm
+      · Docker accesible          → docker
+      · kubectl accesible (o --k8s-context) → k8s
     """
     selected: set = set()
-    domain = getattr(args, "domain", None)
-    url    = getattr(args, "url", None)
-    host   = getattr(args, "host", None)
-    path   = getattr(args, "path", None)
-    jwt    = getattr(args, "jwt", None)
-    log_dir = getattr(args, "log_dir", None)
+    domain       = getattr(args, "domain",       None)
+    url          = getattr(args, "url",          None)
+    host         = getattr(args, "host",         None)
+    path         = getattr(args, "path",         None)
+    jwt          = getattr(args, "jwt",          None)
+    log_dir      = getattr(args, "log_dir",      None)
+    llm_endpoint = getattr(args, "llm_endpoint", None)
+    k8s_context  = getattr(args, "k8s_context",  None)
 
     if domain:
-        selected.update(["recon", "ssl", "http", "wp", "mail", "cloud"])
+        selected.update(["recon", "ssl", "http", "wp", "mail", "cloud", "takeover"])
     if url:
         selected.update(["http", "wp"])
         if not domain and not host:
@@ -774,22 +884,35 @@ def auto_select_tools(args: argparse.Namespace,
     if host:
         selected.update(["ssl", "fort"])
     if path:
-        selected.add("secrets")
+        selected.update(["secrets", "entropy"])
     if jwt:
         selected.add("jwt")
     if log_dir:
-        selected.add("logs")
+        selected.add("forensic")
+    if llm_endpoint:
+        selected.add("llm")
 
     # Docker: comprobar si el daemon responde
     docker_available = shutil.which("docker") is not None
     if docker_available:
         try:
+            r = subprocess.run(["docker", "info"], capture_output=True, timeout=5)
+            if r.returncode == 0:
+                selected.add("docker")
+        except Exception:
+            pass
+
+    # Kubernetes: si se proporcionó contexto explícito o kubectl responde
+    if k8s_context:
+        selected.add("k8s")
+    elif shutil.which("kubectl") is not None:
+        try:
             r = subprocess.run(
-                ["docker", "info"],
+                ["kubectl", "cluster-info", "--request-timeout=3s"],
                 capture_output=True, timeout=5,
             )
             if r.returncode == 0:
-                selected.add("docker")
+                selected.add("k8s")
         except Exception:
             pass
 
@@ -811,13 +934,15 @@ def build_command(tool_name: str, info: Dict, args: argparse.Namespace,
     script = str(tool_dir / info["script"])
     cmd    = [python, script]
     needs  = info["needs"]
-    domain  = getattr(args, "domain", None)
-    url     = getattr(args, "url", None)
-    host    = getattr(args, "host", None)
-    path    = getattr(args, "path", None)
-    jwt_tok = getattr(args, "jwt", None)
-    log_dir = getattr(args, "log_dir", None)
-    cve_ids = getattr(args, "cve", None)  # puede ser lista o str
+    domain       = getattr(args, "domain",       None)
+    url          = getattr(args, "url",          None)
+    host         = getattr(args, "host",         None)
+    path         = getattr(args, "path",         None)
+    jwt_tok      = getattr(args, "jwt",          None)
+    log_dir      = getattr(args, "log_dir",      None)
+    cve_ids      = getattr(args, "cve",          None)
+    llm_endpoint = getattr(args, "llm_endpoint", None)
+    k8s_context  = getattr(args, "k8s_context",  None)
 
     # Mapear argumentos de objetivo a cada herramienta
     if "domain" in needs:
@@ -826,7 +951,7 @@ def build_command(tool_name: str, info: Dict, args: argparse.Namespace,
             target = urlparse(url).netloc or None
         if not target:
             return None
-        if tool_name in ("recon", "mail", "cloud"):
+        if tool_name in ("recon", "mail", "cloud", "takeover"):
             cmd.extend(["-d", target])
         elif tool_name == "ssl":
             cmd.extend(["-H", target])
@@ -858,8 +983,12 @@ def build_command(tool_name: str, info: Dict, args: argparse.Namespace,
     if "path" in needs:
         if not path:
             return None
-        # path es argumento posicional para secrets-scanner
-        cmd.append(path)
+        if tool_name == "secrets":
+            # secrets-scanner acepta path como argumento posicional
+            cmd.append(path)
+        else:
+            # entropy y otras herramientas usan --path
+            cmd.extend(["--path", path])
 
     if "token" in needs:
         if not jwt_tok:
@@ -875,8 +1004,16 @@ def build_command(tool_name: str, info: Dict, args: argparse.Namespace,
         targets = cve_ids if isinstance(cve_ids, list) else ([cve_ids] if cve_ids else [])
         if not targets:
             return None
-        # CVE IDs son argumentos posicionales
         cmd.extend(targets)
+
+    if "llm_endpoint" in needs:
+        if not llm_endpoint:
+            return None
+        cmd.extend(["--endpoint", llm_endpoint])
+
+    # k8s: contexto opcional (usa el activo de kubeconfig si no se proporciona)
+    if tool_name == "k8s" and k8s_context:
+        cmd.extend(["--context", k8s_context])
 
     # Flag de salida JSON
     cmd.extend([info["json_flag"], json_out])
@@ -981,9 +1118,10 @@ def _build_status_table(tool_runs: List[ToolRun]) -> Table:
 
 def deduplicate_findings(findings: List[dict]) -> List[dict]:
     """
-    Detecta y agrupa hallazgos casi-duplicados (mismo título + misma severidad)
-    provenientes de distintas herramientas.
+    Detecta y agrupa hallazgos casi-duplicados provenientes de distintas herramientas.
 
+    Clave de deduplicación: severidad + título (60 chars) + host afectado (30 chars).
+    Incluir el host evita fusionar el mismo tipo de hallazgo en hosts distintos.
     El primer hallazgo del grupo es el canónico; los duplicados se eliminan y
     se añade una nota «(+N duplicados)» al título del hallazgo canónico.
     """
@@ -991,7 +1129,10 @@ def deduplicate_findings(findings: List[dict]) -> List[dict]:
     order:  List[str] = []
 
     for f in findings:
-        key = f"{f.get('severity','INFO')}|{(f.get('title','') or '')[:60].lower()}"
+        sev      = f.get("severity", "INFO")
+        title    = (f.get("title", "") or "")[:60].lower()
+        affected = (f.get("affected", "") or "")[:30].lower()
+        key = f"{sev}|{title}|{affected}"
         if key not in groups:
             groups[key] = []
             order.append(key)
@@ -1018,13 +1159,19 @@ def compute_risk_score(findings: List[dict]) -> int:
     """
     Calcula la puntuación de riesgo compuesta (0–100).
 
-    Ponderación: CRITICAL=25 pts, HIGH=10, MEDIUM=5, LOW=1, INFO=0.
-    El resultado se recorta a 100.
+    Usa una escala logarítmica que satura gradualmente al acumular hallazgos:
+    raw = CRITICAL×25 + HIGH×10 + MEDIUM×5 + LOW×1
+    score = 100 × (1 − e^(−raw/75))
+
+    Ejemplos representativos:
+      1 CRITICAL (raw=25)  → 28   4 CRITICALs (raw=100) → 74
+      1 HIGH (raw=10)      → 13   8 HIGHs (raw=80)       → 66
+      5 MEDIUMs (raw=25)   → 28   20 MEDIUMs (raw=100)   → 74
     """
-    score = 0
-    for f in findings:
-        score += RISK_WEIGHTS.get(f.get("severity", "INFO"), 0)
-    return min(score, 100)
+    raw = sum(RISK_WEIGHTS.get(f.get("severity", "INFO"), 0) for f in findings)
+    if raw == 0:
+        return 0
+    return min(100, max(1, int(100 * (1 - math.exp(-raw / 75)))))
 
 
 # ---------------------------------------------------------------------------
@@ -1056,9 +1203,11 @@ def print_unified_report(result: OrchestratorResult, console: Console) -> None:
         by_sev[f.get("severity", "INFO")] = by_sev.get(f.get("severity", "INFO"), 0) + 1
 
     target_str = " | ".join(filter(None, [
-        f"Dominio: {result.target_domain}" if result.target_domain else "",
-        f"URL: {result.target_url}"        if result.target_url    else "",
-        f"Host: {result.target_host}"      if result.target_host   else "",
+        f"Dominio: {result.target_domain}"   if result.target_domain       else "",
+        f"URL: {result.target_url}"          if result.target_url          else "",
+        f"Host: {result.target_host}"        if result.target_host         else "",
+        f"K8s: {result.target_k8s_context}"  if result.target_k8s_context  else "",
+        f"LLM: {result.target_llm_endpoint}" if result.target_llm_endpoint else "",
     ])) or "—"
 
     tools_ok  = sum(1 for t in result.tools_run if t.status == "done")
@@ -1524,6 +1673,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Directorio de logs a analizar")
     tgt.add_argument("--cve", metavar="CVE-ID", nargs="+",
                      help="CVE IDs a analizar con vamp-cve-oracle")
+    tgt.add_argument("--k8s-context", metavar="CONTEXT", dest="k8s_context",
+                     help="Contexto Kubernetes para auditoría K8s (omitir = contexto activo)")
+    tgt.add_argument("--llm-endpoint", metavar="URL", dest="llm_endpoint",
+                     help="Endpoint del LLM para auditoría de seguridad IA (ej: http://localhost:11434)")
 
     # Selección de herramientas
     sel = p.add_argument_group("Selección de herramientas")
@@ -1697,13 +1850,15 @@ def orchestrate(args: argparse.Namespace, console: Console) -> OrchestratorResul
         pass
 
     return OrchestratorResult(
-        target_domain = getattr(args, "domain", None),
-        target_url    = getattr(args, "url", None),
-        target_host   = getattr(args, "host", None),
-        tools_run     = tool_runs,
-        all_findings  = all_findings,
-        risk_score    = risk_score,
-        duration      = total_duration,
+        target_domain       = getattr(args, "domain",       None),
+        target_url          = getattr(args, "url",          None),
+        target_host         = getattr(args, "host",         None),
+        target_k8s_context  = getattr(args, "k8s_context",  None),
+        target_llm_endpoint = getattr(args, "llm_endpoint", None),
+        tools_run           = tool_runs,
+        all_findings        = all_findings,
+        risk_score          = risk_score,
+        duration            = total_duration,
     )
 
 
@@ -1731,18 +1886,22 @@ def save_json(result: OrchestratorResult, path: str) -> None:
         result.target_domain,
         result.target_url,
         result.target_host,
+        result.target_k8s_context,
+        result.target_llm_endpoint,
     ])) or "—"
 
     payload = {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "tool":           TOOL_NAME,
         "tool_version":   VERSION,
         "generated":      datetime.now(timezone.utc).isoformat(),
         "meta": {
-            "target":         target_str,
-            "target_domain":  result.target_domain,
-            "target_url":     result.target_url,
-            "target_host":    result.target_host,
+            "target":               target_str,
+            "target_domain":        result.target_domain,
+            "target_url":           result.target_url,
+            "target_host":          result.target_host,
+            "target_k8s_context":   result.target_k8s_context,
+            "target_llm_endpoint":  result.target_llm_endpoint,
             "duration_total": round(result.duration, 2),
             "risk_score":     result.risk_score,
             "tools_run": [
@@ -1792,17 +1951,19 @@ def main() -> None:
 
     # Validar que se ha proporcionado al menos un objetivo
     has_target = any([
-        getattr(args, "domain", None),
-        getattr(args, "url", None),
-        getattr(args, "host", None),
-        getattr(args, "path", None),
-        getattr(args, "jwt", None),
-        getattr(args, "log_dir", None),
-        getattr(args, "cve", None),
-        getattr(args, "tools", None),  # --tools docker no necesita objetivo
+        getattr(args, "domain",       None),
+        getattr(args, "url",          None),
+        getattr(args, "host",         None),
+        getattr(args, "path",         None),
+        getattr(args, "jwt",          None),
+        getattr(args, "log_dir",      None),
+        getattr(args, "cve",          None),
+        getattr(args, "llm_endpoint", None),
+        getattr(args, "k8s_context",  None),
+        getattr(args, "tools",        None),  # --tools docker/k8s no necesitan objetivo
     ])
     if not has_target:
-        console.print("[bold red]Error:[/] Proporciona al menos un objetivo (-d, -u, -H, -p, --jwt, --log-dir, --cve).")
+        console.print("[bold red]Error:[/] Proporciona al menos un objetivo (-d, -u, -H, -p, --jwt, --log-dir, --cve, --llm-endpoint, --k8s-context).")
         parser.print_help()
         sys.exit(1)
 
