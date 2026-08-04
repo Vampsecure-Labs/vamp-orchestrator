@@ -1,7 +1,7 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.0-crimson?style=flat-square" />
+  <img src="https://img.shields.io/badge/version-2.0-crimson?style=flat-square" />
   <img src="https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python&logoColor=white" />
-  <img src="https://img.shields.io/badge/tools-12%20VSL%20slots-teal?style=flat-square" />
+  <img src="https://img.shields.io/badge/tools-16%20VSL%20slots-teal?style=flat-square" />
   <img src="https://img.shields.io/badge/VampSecure_Labs-Security_Research-8b0000?style=flat-square" />
 </p>
 
@@ -12,21 +12,22 @@
 
 ## Overview
 
-**vamp-orchestrator** is the meta-orchestrator for the VampSecure Labs toolkit. It auto-discovers installed VSL tools, selects the appropriate subset based on the assessment objective (domain, URL, host, path, or CVE list), executes them sequentially or in parallel, deduplicates findings across tools, and produces a unified risk-scored report.
+**vamp-orchestrator** is the meta-orchestrator for the VampSecure Labs toolkit. It auto-discovers installed VSL tools, selects the appropriate subset based on the assessment objective (domain, URL, host, path, log directory, Kubernetes cluster, or LLM endpoint), executes them sequentially or in parallel, deduplicates findings across tools, and produces a unified risk-scored report.
 
-The orchestrator solves the coordination overhead of running multiple specialized scanners: each tool result is parsed, normalized, and merged into a single finding set. Duplicate findings (same severity + title prefix) are collapsed and attributed to all contributing tools. A composite risk score (capped at 100) is computed from the deduplicated finding set and drives the final exit code.
+Each tool result is parsed by a dedicated extractor, normalized to the VSL finding schema, and merged into a single deduplicated finding set. Findings from forensic log analysis preserve their MITRE ATT&CK mapping (tactic, technique). A logarithmic composite risk score differentiates engagements with few versus many high-severity findings.
 
 ---
 
 ## Features
 
-- Auto-discovery of up to 12 VampSecure Labs tool slots in the tool directory
-- Objective-driven tool selection: domain, URL, host, path, JWT, and CVE targets each trigger a different tool subset
+- Auto-discovery of up to **16 VampSecure Labs tool slots** in the tool directory
+- Objective-driven tool selection: domain, URL, host, path, JWT, log directory, K8s context, LLM endpoint, and CVE targets each trigger a different tool subset
 - Sequential and parallel execution modes with configurable parallelism limit
-- Finding deduplication across tool outputs (matched by severity + title prefix, 60 characters)
-- Composite risk scoring: CRITICAL=25, HIGH=10, MEDIUM=5, LOW=1, INFO=0 (capped at 100)
-- Per-tool execution log directory for full audit trail
-- Unified JSON and HTML reporting via the `vampsec_report` module
+- **Improved deduplication**: findings matched by `severity + title[:60] + affected[:30]` — same finding type on different hosts is never collapsed
+- **Logarithmic risk scoring**: `score = 100 × (1 − e^(−raw/75))` — differentiates engagements with 4 vs. 20 critical findings instead of saturating at the same value
+- Dedicated extractor for `vamp-log-analyzer` preserving MITRE ATT&CK fields (`mitre_tactic`, `mitre_technique`, `event_count`)
+- Auto-detection of Docker daemon and `kubectl` availability for containerized target selection
+- Unified JSON (`schema_version: 2.0`) and HTML reporting
 - Custom tool path and Python interpreter configuration for virtual environment isolation
 
 ---
@@ -38,7 +39,7 @@ Python 3.11+
 rich >= 13.7.0
 ```
 
-Individual tool dependencies must be installed per their own `requirements.txt`. Install dependencies:
+Individual tool dependencies must be installed per their own `requirements.txt`.
 
 ```bash
 pip install -r requirements.txt
@@ -49,12 +50,12 @@ pip install -r requirements.txt
 ## Installation
 
 ```bash
-git clone https://github.com/belky-me/vamp-orchestrator.git
+git clone https://github.com/Vampsecure-Labs/vamp-orchestrator.git
 cd vamp-orchestrator
 pip install -r requirements.txt
 ```
 
-Ensure the other VSL tools are present and their dependencies installed. By default, the orchestrator looks for tools in the same parent directory.
+Ensure the other VSL tools are present in the same directory and their dependencies installed.
 
 ---
 
@@ -63,13 +64,16 @@ Ensure the other VSL tools are present and their dependencies installed. By defa
 ```
 python vamp_orchestrator.py [TARGET OPTIONS] [TOOL OPTIONS] [OUTPUT OPTIONS]
 
-Assessment objective (use one or more):
+Assessment objectives (use one or more):
   -d, --domain DOMAIN            Target apex domain
   -u, --url URL                  Target URL (enables HTTP/web tool subset)
   -H, --host HOST[:PORT]         Target IP or hostname with optional port
-  -p, --path PATH                File path for secrets scanning
+  -p, --path PATH                File system path for secrets and entropy scanning
+      --log-dir DIR              Directory of logs for forensic analysis (vamp-log-analyzer)
       --jwt TOKEN                JWT token for analysis
       --cve CVE-ID [CVE-ID ...]  CVE identifiers to analyze
+      --k8s-context CONTEXT      Kubernetes context for cluster audit (omit = active context)
+      --llm-endpoint URL         LLM endpoint for AI security probing
 
 Tool selection:
       --tools TOOL,...           Comma-separated tool names, or 'all' (default: auto-select)
@@ -81,7 +85,6 @@ Execution:
       --parallel                 Run tools in parallel instead of sequentially
       --max-parallel N           Maximum simultaneous tool processes (default: 3)
       --timeout N                Per-tool execution timeout in seconds (default: 300)
-      --log-dir DIR              Directory for per-tool execution logs
 
 Output:
       --json FILE                Write unified findings to JSON
@@ -98,27 +101,34 @@ Full domain assessment using auto-selected tools:
 python vamp_orchestrator.py -d example.com --json assessment.json --html report.html
 ```
 
-Host assessment targeting a specific IP and port:
-
-```bash
-python vamp_orchestrator.py -H 203.0.113.1:443 --json host_findings.json
-```
-
-Domain assessment in parallel mode with a 5-tool concurrency limit:
-
-```bash
-python vamp_orchestrator.py -d example.com --parallel --max-parallel 5 --html full_report.html
-```
-
-Run only specific tools against a domain:
+Domain + forensic log analysis in parallel:
 
 ```bash
 python vamp_orchestrator.py -d example.com \
-  --tools vamp-passive-recon,vamp-subdomain-takeover,vamp-cloud-enum \
-  --json selected_tools.json
+  --log-dir /var/log/nginx \
+  --parallel --max-parallel 5 \
+  --html full_report.html
 ```
 
-CVE batch analysis via orchestrator (delegates to vamp-cve-oracle):
+Kubernetes cluster audit using a named context:
+
+```bash
+python vamp_orchestrator.py --k8s-context prod-cluster --json k8s_findings.json
+```
+
+LLM endpoint security assessment:
+
+```bash
+python vamp_orchestrator.py --llm-endpoint http://localhost:11434 --json llm_audit.json
+```
+
+Path scan (secrets + entropy anomalies):
+
+```bash
+python vamp_orchestrator.py -p /opt/myapp --json path_scan.json
+```
+
+CVE batch analysis:
 
 ```bash
 python vamp_orchestrator.py --cve CVE-2024-21762 CVE-2023-27997 CVE-2022-40684 \
@@ -132,9 +142,8 @@ python vamp_orchestrator.py --cve CVE-2024-21762 CVE-2023-27997 CVE-2022-40684 \
 | Format | How to enable | Description |
 |--------|---------------|-------------|
 | Console | Default | Rich execution log with per-tool status, finding counts, and composite score |
-| JSON | `--json FILE` | Deduplicated unified findings from all tools with source attribution |
-| HTML | `--html FILE` | Standalone consolidated report via `vampsec_report` |
-| Per-tool logs | `--log-dir DIR` | Raw stdout/stderr per tool for debugging and audit trail |
+| JSON | `--json FILE` | Deduplicated unified findings (schema_version 2.0) |
+| HTML | `--html FILE` | Standalone consolidated dark-theme report |
 
 ---
 
@@ -150,17 +159,22 @@ python vamp_orchestrator.py --cve CVE-2024-21762 CVE-2023-27997 CVE-2022-40684 \
 
 ## Risk Scoring
 
-The composite score is computed from deduplicated findings across all tools:
+The composite score uses a logarithmic scale that saturates gracefully as findings accumulate:
 
-| Severity | Points |
-|----------|--------|
-| CRITICAL | 25 |
-| HIGH | 10 |
-| MEDIUM | 5 |
-| LOW | 1 |
-| INFO | 0 |
+```
+raw   = CRITICAL×25 + HIGH×10 + MEDIUM×5 + LOW×1
+score = 100 × (1 − e^(−raw/75))
+```
 
-Score is capped at 100. Duplicate findings (same severity + first 60 characters of title from different tools) are merged into a single finding and counted once.
+| Scenario | raw | Score |
+|----------|-----|-------|
+| 1 CRITICAL | 25 | 28 |
+| 4 CRITICALs | 100 | 74 |
+| 8 CRITICALs | 200 | 93 |
+| 5 HIGHs | 50 | 49 |
+| 10 MEDIUMs | 50 | 49 |
+
+Duplicate findings (same severity + title + affected host) are merged and counted once.
 
 ---
 
@@ -168,26 +182,54 @@ Score is capped at 100. Duplicate findings (same severity + first 60 characters 
 
 | Objective flag | Tools auto-selected |
 |----------------|-------------------|
-| `-d` (domain) | passive-recon, ssl-audit, http-scanner, cloud-enum, subdomain-takeover, mail-security |
-| `-H` (host) | ssl-audit, forticheck |
-| `-u` (URL) | http-scanner, ssl-audit, secrets-scanner |
-| `-p` (path) | secrets-scanner |
+| `-d` (domain) | passive-recon, ssl, http, wp, mail, cloud, **takeover** |
+| `-H` (host) | ssl, forticheck |
+| `-u` (URL) | http, wp; ssl + recon if no domain/host |
+| `-p` (path) | secrets-scanner, **entropy-watch** |
+| `--log-dir` | **forensic** (vamp-log-analyzer with MITRE ATT&CK) |
+| `--k8s-context` or kubectl present | **k8s-audit** |
+| `--llm-endpoint` | **llm-probe** |
 | `--cve` | cve-oracle |
+| Docker daemon accessible | docker-audit |
+
+---
+
+## Tool Catalog (v2.0)
+
+| Slot | Script | Prefix | Trigger |
+|------|--------|--------|---------|
+| `recon` | vamp_passive_recon.py | RECON | domain |
+| `ssl` | vamp_ssl_audit.py | SSL | host / domain |
+| `http` | vamp_http_audit.py | HTTP | url / domain |
+| `wp` | vamp_wp2shell_audit.py | WP | url / domain |
+| `secrets` | vamp_secrets_scanner.py | SEC | path |
+| `jwt` | vamp_jwt_audit.py | JWT | --jwt |
+| `mail` | vamp_mail_audit.py | MAIL | domain |
+| `docker` | vamp_docker_audit.py | DOCK | auto (docker daemon) |
+| `forensic` | vamp_log_analyzer.py | FORA | --log-dir |
+| `cloud` | vamp_cloud_enum.py | CLOUD | domain |
+| `fort` | vamp_forticheck.py | FTC | host |
+| `cve` | vamp_cve_oracle.py | RBVM | --cve |
+| `takeover` | vamp_subdomain_takeover.py | SDT | domain |
+| `k8s` | vamp_k8s_audit.py | K8S | auto (kubectl) / --k8s-context |
+| `entropy` | vamp_entropy_watch.py | ENT | path |
+| `llm` | vamp_llm_probe.py | LLM | --llm-endpoint |
 
 ---
 
 ## Part of VampSecure Labs Toolkit
 
-`vamp-orchestrator` is part of the **VampSecure Labs Security Research Toolkit** — a collection of professional-grade, self-hosted security assessment tools.
+`vamp-orchestrator` is part of the **VampSecure Labs Security Research Toolkit**.
 
 | Tool | Purpose |
 |------|---------|
-| [vamp-forticheck](https://github.com/belky-me/vamp-forticheck) | Multi-vendor edge device CVE scanner |
-| [vamp-cve-oracle](https://github.com/belky-me/vamp-cve-oracle) | CVE intelligence and RBVM engine |
-| [vamp-passive-recon](https://github.com/belky-me/vamp-passive-recon) | Passive recon and attack surface mapping |
-| [vamp-subdomain-takeover](https://github.com/belky-me/vamp-subdomain-takeover) | Subdomain takeover vulnerability scanner |
-| [vamp-cloud-enum](https://github.com/belky-me/vamp-cloud-enum) | Cloud storage bucket enumerator |
-| [vamp-orchestrator](https://github.com/belky-me/vamp-orchestrator) | Multi-tool assessment orchestrator |
+| [vamp-passive-recon](https://github.com/Vampsecure-Labs/vamp-passive-recon) | Passive recon and ASM |
+| [vamp-subdomain-takeover](https://github.com/Vampsecure-Labs/vamp-subdomain-takeover) | Subdomain takeover scanner |
+| [vamp-log-analyzer](https://github.com/Vampsecure-Labs/vamp-log-analyzer) | Forensic log analysis — 25 MITRE ATT&CK detectors |
+| [vamp-k8s-audit](https://github.com/Vampsecure-Labs/vamp-k8s-audit) | Kubernetes cluster security audit |
+| [vamp-entropy-watch](https://github.com/Vampsecure-Labs/vamp-entropy-watch) | Entropy-based ransomware / exfil detector |
+| [vamp-llm-probe](https://github.com/Vampsecure-Labs/vamp-llm-probe) | LLM endpoint security assessment |
+| [vamp-penreport](https://github.com/Vampsecure-Labs/vamp-penreport) | Executive report aggregator |
 
 ---
 
