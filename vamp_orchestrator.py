@@ -218,6 +218,24 @@ VSL_TOOLS: Dict[str, Dict] = {
         "needs":     ["llm_endpoint"],
         "json_flag": "--json",
     },
+    "hunter":   {
+        "script":    "vamp_log_hunter.py",
+        "prefix":    "HUNT",
+        "needs":     ["log_dir"],
+        "json_flag": "--json",
+    },
+    "arp":      {
+        "script":    "vamp_arp_sentinel.py",
+        "prefix":    "ARP",
+        "needs":     [],
+        "json_flag": "--json",
+    },
+    "report":   {
+        "script":    "vamp_penreport.py",
+        "prefix":    "RPT",
+        "needs":     ["path"],
+        "json_flag": "--json",
+    },
 }
 
 
