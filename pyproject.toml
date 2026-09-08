@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "vamp-orchestrator"
+version = "2.0"
+description = "VampSecure Labs tool orchestrator for automated authorized security audits"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+authors = [{ name = "VampSecure Studios", email = "contact@vampsecurestudios.com" }]
+keywords = ["security", "pentest", "audit", "cybersecurity", "vampsecure", "orchestration", "automation", "pipeline", "red-team"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+]
+dependencies = [
+    "rich>=13.7.0",
+]
+
+
+[project.scripts]
+vamp-orchestrator = "vamp_orchestrator:main"
+
+[project.urls]
+Homepage = "https://github.com/Vampsecure-Labs/vamp-orchestrator"
+Repository = "https://github.com/Vampsecure-Labs/vamp-orchestrator"
+
+[tool.setuptools]
+py-modules = ["vamp_orchestrator", "vampsec_report"]
