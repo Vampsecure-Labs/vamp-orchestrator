@@ -81,7 +81,7 @@ from vampsec_report import (
 # Constantes
 # ---------------------------------------------------------------------------
 
-VERSION   = "2.0"
+VERSION   = "2.1"
 TOOL_NAME = "vamp-orchestrator"
 AUTHOR    = "© VampSecure Studios — VampSecure Labs Security Research Division"
 
@@ -861,6 +861,77 @@ def discover_tools(tool_dir: Path) -> Dict[str, bool]:
         script = tool_dir / info["script"]
         availability[tool_name] = script.is_file()
     return availability
+
+
+# ---------------------------------------------------------------------------
+# Descubrimiento de plugins VSL adicionales en el PATH
+# ---------------------------------------------------------------------------
+
+def discover_path_plugins() -> List[Dict]:
+    """
+    Busca en las entradas del PATH binarios que empiecen por 'vamp-' y no
+    sean las herramientas VSL ya conocidas.
+
+    Para cada binario encontrado, intenta ejecutar '<binario> --vsl-meta'
+    con timeout de 5 s. Si devuelve JSON con {name, version, input_types},
+    el plugin se registra como compatible; en caso contrario se anota sin
+    metadatos para que aparezca en el listado de todas formas.
+
+    Devuelve List[Dict] con claves:
+      binary, name, version, input_types, compatible
+    """
+    # Nombres normalizados de las herramientas nativas ya catalogadas
+    known_normalized: set = set()
+    for info in VSL_TOOLS.values():
+        known_normalized.add(info["script"].replace(".py", "").replace("_", "-"))
+    known_normalized.add(TOOL_NAME)   # el propio orquestador
+
+    plugins: List[Dict] = []
+    seen:    set = set()
+
+    for path_dir in os.environ.get("PATH", "").split(os.pathsep):
+        try:
+            path_obj = Path(path_dir)
+            if not path_obj.is_dir():
+                continue
+            for entry in sorted(path_obj.iterdir()):
+                name = entry.name
+                # Solo ficheros ejecutables que empiecen por 'vamp-'
+                if not name.startswith("vamp-") or not entry.is_file():
+                    continue
+                # Normalizar para comparar (sin extensión, guiones)
+                norm = name.replace(".py", "").replace("_", "-").lower()
+                if norm in known_normalized or norm in seen:
+                    continue
+                seen.add(norm)
+
+                # Intentar obtener metadatos VSL via '--vsl-meta'
+                meta_json: Optional[Dict] = None
+                try:
+                    proc = subprocess.run(
+                        [str(entry), "--vsl-meta"],
+                        capture_output=True,
+                        timeout=5,
+                        text=True,
+                    )
+                    if proc.returncode == 0 and proc.stdout.strip():
+                        candidate = json.loads(proc.stdout.strip())
+                        if isinstance(candidate, dict) and "name" in candidate:
+                            meta_json = candidate
+                except Exception:
+                    pass   # No compatible o no responde — registrar sin metadatos
+
+                plugins.append({
+                    "binary":      str(entry),
+                    "name":        meta_json.get("name",        norm) if meta_json else norm,
+                    "version":     meta_json.get("version",     "?")  if meta_json else "?",
+                    "input_types": meta_json.get("input_types", [])   if meta_json else [],
+                    "compatible":  meta_json is not None,
+                })
+        except (PermissionError, OSError):
+            continue
+
+    return plugins
 
 
 # ---------------------------------------------------------------------------
@@ -1706,6 +1777,8 @@ def build_parser() -> argparse.ArgumentParser:
                      ))
     sel.add_argument("--skip", metavar="LISTA",
                      help="Herramientas a omitir (separadas por coma)")
+    sel.add_argument("--list-tools", action="store_true", dest="list_tools",
+                     help="Lista las herramientas VSL disponibles y los plugins detectados en PATH, luego sale")
 
     # Ejecución
     exc = p.add_argument_group("Opciones de ejecución")
@@ -1947,6 +2020,373 @@ def save_json(result: OrchestratorResult, path: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Subcomando: listar herramientas y plugins
+# ---------------------------------------------------------------------------
+
+def _cmd_list_tools(tool_dir: Path, console: Console) -> None:
+    """
+    Imprime un listado de las herramientas VSL nativas disponibles en tool_dir
+    y de los plugins adicionales detectados en el PATH mediante descubrimiento
+    automático (binarios 'vamp-*' con soporte --vsl-meta).
+    """
+    availability = discover_tools(tool_dir)
+    plugins      = discover_path_plugins()
+
+    # ── Herramientas nativas ────────────────────────────────────────────────
+    tbl = Table(
+        title="Herramientas VSL Nativas",
+        title_style="bold cyan",
+        border_style="bright_black",
+        header_style="bold",
+    )
+    tbl.add_column("Nombre",           style="bold white", no_wrap=True, width=12)
+    tbl.add_column("Script",           style="dim",        no_wrap=True, width=28)
+    tbl.add_column("Disponible",       justify="center",               width=12)
+    tbl.add_column("Tipos de entrada", style="dim")
+
+    for name, info in VSL_TOOLS.items():
+        avail      = availability.get(name, False)
+        avail_text = Text("✅ Sí", style="green") if avail else Text("❌ No", style="dim red")
+        needs      = ", ".join(info.get("needs", [])) or "ninguno"
+        tbl.add_row(name, info["script"], avail_text, needs)
+
+    console.print(tbl)
+    console.print()
+
+    # ── Plugins en el PATH ─────────────────────────────────────────────────
+    if not plugins:
+        console.print("[dim]No se encontraron plugins VSL adicionales en el PATH.[/]")
+        return
+
+    ptbl = Table(
+        title="Plugins VSL detectados en PATH",
+        title_style="bold magenta",
+        border_style="bright_black",
+        header_style="bold",
+    )
+    ptbl.add_column("Nombre",        style="bold white", no_wrap=True, width=24)
+    ptbl.add_column("Versión",       justify="center",               width=10)
+    ptbl.add_column("Compatible",    justify="center",               width=12)
+    ptbl.add_column("Tipos entrada", style="dim")
+    ptbl.add_column("Binario",       style="dim")
+
+    for p in plugins:
+        compat_text = (
+            Text("✅ VSL",    style="green")
+            if p["compatible"]
+            else Text("⚠ Sin meta", style="dim yellow")
+        )
+        types_str = ", ".join(p["input_types"]) or "—"
+        ptbl.add_row(p["name"], p["version"], compat_text, types_str, p["binary"])
+
+    console.print(ptbl)
+
+
+# ---------------------------------------------------------------------------
+# Subcomando: diff entre dos escaneos
+# ---------------------------------------------------------------------------
+
+def _finding_key(f: dict) -> str:
+    """
+    Clave de comparación de un hallazgo para el modo diff.
+
+    Estrategia:
+      · Si el hallazgo tiene un campo 'check_id' explícito (no el ID auto-generado),
+        usa (check_id, host) para mayor estabilidad entre escaneos.
+      · En caso contrario (ID tipo RECON-001 generado por secuencia), usa
+        (title, affected) para que el mismo tipo de problema se compare aunque
+        cambie el número de secuencia.
+    """
+    check_id = f.get("check_id")
+    host     = (f.get("affected") or f.get("target") or "")[:80]
+    title    = (f.get("title") or "")[:80]
+
+    if check_id:
+        return f"__id__{check_id}|{host}"
+    return f"__title__{title.lower().strip()}|{host.lower().strip()}"
+
+
+def _load_scan_findings(path: str) -> List[dict]:
+    """Carga la lista de hallazgos de un fichero JSON de escaneo VSL."""
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    for key in ("findings", "results", "issues", "vulnerabilities", "alerts"):
+        if isinstance(data.get(key), list):
+            return data[key]
+    return []
+
+
+def _generate_diff_html(
+    scan1_path: str,
+    scan2_path: str,
+    findings1: List[dict],
+    findings2: List[dict],
+) -> str:
+    """
+    Genera el HTML del informe de diferencias entre dos escaneos VSL.
+
+    Código de colores:
+      · Rojo  (NUEVO)    — hallazgo aparece en scan2 pero no en scan1 (regresión)
+      · Verde (RESUELTO) — hallazgo estaba en scan1 pero no en scan2 (mejora)
+      · Gris  (PERSISTE) — hallazgo presente en ambos escaneos
+    """
+    now_str    = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    scan1_name = Path(scan1_path).name
+    scan2_name = Path(scan2_path).name
+
+    keys1 = {_finding_key(f): f for f in findings1}
+    keys2 = {_finding_key(f): f for f in findings2}
+
+    new_findings        = [keys2[k] for k in keys2 if k not in keys1]
+    resolved_findings   = [keys1[k] for k in keys1 if k not in keys2]
+    persistent_findings = [keys2[k] for k in keys2 if k in keys1]
+
+    n_new        = len(new_findings)
+    n_resolved   = len(resolved_findings)
+    n_persistent = len(persistent_findings)
+    n_total_old  = len(findings1)
+    n_total_new  = len(findings2)
+
+    improvement_pct = round(n_resolved / max(n_total_old, 1) * 100)
+    regression_pct  = round(n_new      / max(n_total_old, 1) * 100)
+
+    sev_card_colors = {
+        "CRITICAL": "#c0392b", "HIGH": "#d35400",
+        "MEDIUM":   "#d4ac0d", "LOW":  "#2980b9", "INFO": "#7f8c8d",
+    }
+
+    def _row(f: dict, row_class: str, label: str) -> str:
+        sev = f.get("severity", "INFO")
+        c   = sev_card_colors.get(sev, "#555")
+        return (
+            f'<tr class="{row_class}">'
+            f'<td><span class="tag-{row_class}">{label}</span></td>'
+            f'<td><span class="badge" style="background:{c}">{_he(sev)}</span></td>'
+            f'<td class="mono">{_he(f.get("id", "?"))}</td>'
+            f'<td>{_he((f.get("title") or "")[:90])}</td>'
+            f'<td class="dim mono">'
+            f'{_he((f.get("affected") or f.get("target") or "—")[:60])}</td>'
+            f'</tr>\n'
+        )
+
+    rows_html = ""
+    for f in sorted(new_findings,
+                    key=lambda x: SEVERITY_ORDER.get(x.get("severity", "INFO"), 99)):
+        rows_html += _row(f, "new", "NUEVO")
+    for f in sorted(resolved_findings,
+                    key=lambda x: SEVERITY_ORDER.get(x.get("severity", "INFO"), 99)):
+        rows_html += _row(f, "resolved", "RESUELTO")
+    for f in sorted(persistent_findings,
+                    key=lambda x: SEVERITY_ORDER.get(x.get("severity", "INFO"), 99)):
+        rows_html += _row(f, "persistent", "PERSISTE")
+
+    variacion = n_total_new - n_total_old
+    var_color = "#27ae60" if variacion <= 0 else "#c0392b"
+    var_str   = ("+" if variacion > 0 else "") + str(variacion)
+
+    html = f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Diff VSL — {_he(scan1_name)} vs {_he(scan2_name)}</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+     background:#0d0d14;color:#e0e0e8;line-height:1.6;font-size:14px}}
+code,.mono{{font-family:'Courier New',monospace;font-size:.85em;color:#a0c8e8}}
+.dim{{opacity:.6}}
+.wrap{{max-width:1100px;margin:0 auto;padding:0 0 60px}}
+.header{{background:linear-gradient(135deg,#1a1a2e 0%,#6e0000 50%,#c0392b 100%);
+         padding:36px 48px}}
+.brand{{font-size:.72em;letter-spacing:3px;text-transform:uppercase;
+        opacity:.55;margin-bottom:16px;color:#eee}}
+.h-title{{font-size:1.6em;font-weight:700;color:#fff;margin-bottom:4px}}
+.h-sub{{font-size:.88em;opacity:.65;color:#ddd;margin-bottom:18px}}
+.h-meta{{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;font-size:.82em}}
+.h-item span{{display:block;opacity:.45;font-size:.78em;text-transform:uppercase;
+              letter-spacing:.4px;margin-bottom:2px;color:#bbb}}
+.h-item strong{{color:#eee}}
+.stats{{display:flex;gap:16px;flex-wrap:wrap;padding:24px 48px;
+        background:#0f0f1a;border-bottom:1px solid #1e1e2e}}
+.stat{{background:#13131f;border:1px solid #2a2a3e;border-radius:6px;
+       padding:14px 20px;min-width:130px;text-align:center}}
+.stat.new-stat{{border-top:3px solid #c0392b}}
+.stat.resolved-stat{{border-top:3px solid #27ae60}}
+.stat.persistent-stat{{border-top:3px solid #555}}
+.stat-val{{font-size:2em;font-weight:700}}
+.stat-lbl{{font-size:.68em;color:#888;text-transform:uppercase;
+           letter-spacing:.4px;margin-top:2px}}
+.new-stat .stat-val{{color:#c0392b}}
+.resolved-stat .stat-val{{color:#27ae60}}
+.persistent-stat .stat-val{{color:#666}}
+.sec{{padding:24px 48px}}
+.sec-title{{font-size:.88em;font-weight:700;color:#c0392b;text-transform:uppercase;
+            letter-spacing:.6px;margin-bottom:14px;display:flex;
+            align-items:center;gap:10px}}
+.sec-title::after{{content:'';flex:1;height:1px;background:#2a2a3e}}
+table{{width:100%;border-collapse:collapse;font-size:.83em}}
+th{{background:#13131f;color:#666;padding:8px 10px;text-align:left;
+    border-bottom:2px solid #1e1e2e;font-size:.73em;text-transform:uppercase;
+    letter-spacing:.4px;font-weight:700}}
+td{{padding:7px 10px;border-bottom:1px solid #1a1a2e;vertical-align:top}}
+tr.new td{{background:rgba(192,57,43,.08)}}
+tr.resolved td{{background:rgba(39,174,96,.08)}}
+tr.new:hover td{{background:rgba(192,57,43,.16)}}
+tr.resolved:hover td{{background:rgba(39,174,96,.16)}}
+tr.persistent:hover td{{background:#0f0f1e}}
+.tag-new{{display:inline-block;padding:2px 7px;border-radius:3px;font-size:.72em;
+          font-weight:700;color:#fff;background:#c0392b}}
+.tag-resolved{{display:inline-block;padding:2px 7px;border-radius:3px;font-size:.72em;
+               font-weight:700;color:#fff;background:#27ae60}}
+.tag-persistent{{display:inline-block;padding:2px 7px;border-radius:3px;font-size:.72em;
+                 font-weight:700;color:#aaa;background:#1e1e2e;border:1px solid #333}}
+.badge{{display:inline-block;padding:2px 8px;border-radius:3px;
+        font-size:.72em;font-weight:700;color:#fff}}
+.footer{{background:#0a0a12;border-top:1px solid #1e1e2e;padding:14px 48px;
+         font-size:.72em;color:#444;display:flex;
+         justify-content:space-between;flex-wrap:wrap;gap:6px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<!-- CABECERA -->
+<div class="header">
+  <div class="brand">&#9679; VampSecure Labs — Security Research Division</div>
+  <div class="h-title">Informe de Diferencias entre Escaneos</div>
+  <div class="h-sub">{TOOL_NAME} v{VERSION} — Diff de resultados VSL</div>
+  <div class="h-meta">
+    <div class="h-item"><span>Escaneo base</span><strong>{_he(scan1_name)}</strong></div>
+    <div class="h-item"><span>Escaneo nuevo</span><strong>{_he(scan2_name)}</strong></div>
+    <div class="h-item"><span>Generado</span><strong>{_he(now_str)}</strong></div>
+    <div class="h-item"><span>Total base</span><strong>{n_total_old} hallazgos</strong></div>
+    <div class="h-item"><span>Total nuevo</span><strong>{n_total_new} hallazgos</strong></div>
+    <div class="h-item"><span>Variación</span>
+      <strong style="color:{var_color}">{var_str}</strong>
+    </div>
+  </div>
+</div>
+
+<!-- ESTADÍSTICAS -->
+<div class="stats">
+  <div class="stat new-stat">
+    <div class="stat-val">{n_new}</div>
+    <div class="stat-lbl">Nuevos (regresión)</div>
+  </div>
+  <div class="stat resolved-stat">
+    <div class="stat-val">{n_resolved}</div>
+    <div class="stat-lbl">Resueltos (mejora)</div>
+  </div>
+  <div class="stat persistent-stat">
+    <div class="stat-val">{n_persistent}</div>
+    <div class="stat-lbl">Persistentes</div>
+  </div>
+  <div class="stat" style="border-top:3px solid #27ae60">
+    <div class="stat-val" style="color:#27ae60">{improvement_pct}%</div>
+    <div class="stat-lbl">Tasa de resolución</div>
+  </div>
+  <div class="stat" style="border-top:3px solid #d35400">
+    <div class="stat-val" style="color:#d35400">{regression_pct}%</div>
+    <div class="stat-lbl">Tasa de regresión</div>
+  </div>
+</div>
+
+<!-- TABLA DE CAMBIOS -->
+<div class="sec">
+  <div class="sec-title">Tabla de Cambios</div>
+  <table>
+    <tr>
+      <th style="width:100px">Estado</th>
+      <th style="width:90px">Severidad</th>
+      <th style="width:110px">ID</th>
+      <th>Título</th>
+      <th>Afectado</th>
+    </tr>
+    {rows_html or
+     "<tr><td colspan='5' style='text-align:center;opacity:.4;padding:20px'>"
+     "Sin cambios detectados entre los dos escaneos</td></tr>"}
+  </table>
+</div>
+
+<!-- PIE -->
+<div class="footer">
+  <span>{AUTHOR}</span>
+  <span>Generado el {_he(now_str)}</span>
+</div>
+
+</div>
+</body>
+</html>"""
+
+    return html
+
+
+def _cmd_diff(argv: List[str]) -> None:
+    """
+    Subcomando 'diff': compara dos ficheros JSON de resultados VSL y genera
+    un informe HTML con hallazgos nuevos (rojo), resueltos (verde) y
+    persistentes (gris), junto con estadísticas de mejora y regresión.
+
+    Uso:
+      vamp_orchestrator.py diff --scan1 base.json --scan2 nuevo.json --html diff.html
+    """
+    p = argparse.ArgumentParser(
+        prog=f"{TOOL_NAME} diff",
+        description=(
+            "Compara dos ficheros de resultados VSL y genera un informe HTML.\n"
+            "Hallazgos nuevos en scan2 → rojo (regresión)\n"
+            "Hallazgos resueltos en scan2 → verde (mejora)\n"
+            "Hallazgos en ambos → gris (persistentes)"
+        ),
+    )
+    p.add_argument("--scan1", required=True, metavar="FICHERO",
+                   help="Escaneo base / más antiguo (JSON VSL)")
+    p.add_argument("--scan2", required=True, metavar="FICHERO",
+                   help="Escaneo nuevo / más reciente (JSON VSL)")
+    p.add_argument("--html", metavar="FICHERO", default="diff.html",
+                   help="Fichero HTML de salida (default: diff.html)")
+    args = p.parse_args(argv)
+
+    console = Console()
+    print_banner(console)
+
+    console.print(f"[bold]Escaneo base:[/]  {args.scan1}")
+    console.print(f"[bold]Escaneo nuevo:[/] {args.scan2}\n")
+
+    try:
+        findings1 = _load_scan_findings(args.scan1)
+    except Exception as exc:
+        console.print(f"[bold red]Error al cargar {args.scan1}: {exc}[/]")
+        sys.exit(1)
+
+    try:
+        findings2 = _load_scan_findings(args.scan2)
+    except Exception as exc:
+        console.print(f"[bold red]Error al cargar {args.scan2}: {exc}[/]")
+        sys.exit(1)
+
+    console.print(f"  Hallazgos base:  [bold]{len(findings1)}[/]")
+    console.print(f"  Hallazgos nuevo: [bold]{len(findings2)}[/]")
+
+    keys1 = {_finding_key(f) for f in findings1}
+    keys2 = {_finding_key(f) for f in findings2}
+    n_new        = len(keys2 - keys1)
+    n_resolved   = len(keys1 - keys2)
+    n_persistent = len(keys1 & keys2)
+
+    console.print()
+    console.print(f"  [bold red]Nuevos (regresión):[/]     {n_new}")
+    console.print(f"  [bold green]Resueltos (mejora):[/]    {n_resolved}")
+    console.print(f"  [dim]Persistentes:[/]              {n_persistent}")
+    console.print()
+
+    html_content = _generate_diff_html(args.scan1, args.scan2, findings1, findings2)
+    Path(args.html).write_text(html_content, encoding="utf-8")
+    console.print(f"[green]✔[/] Informe diff guardado en [bold]{args.html}[/]")
+
+
+# ---------------------------------------------------------------------------
 # Punto de entrada
 # ---------------------------------------------------------------------------
 
@@ -1955,17 +2395,30 @@ def main() -> None:
     Punto de entrada principal del orquestador.
 
     Flujo:
+      0. Subcomando 'diff' → _cmd_diff()
       1. Parseo de argumentos
-      2. Orquestación (descubrimiento → selección → ejecución → fusión)
-      3. Salida en consola (informe unificado)
-      4. Exportación a JSON/HTML si se solicita
-      5. Código de salida: 2=CRITICAL, 1=HIGH, 0=limpio
+      2. --list-tools → _cmd_list_tools() y sale
+      3. Orquestación (descubrimiento → selección → ejecución → fusión)
+      4. Salida en consola (informe unificado)
+      5. Exportación a JSON/HTML si se solicita
+      6. Código de salida: 2=CRITICAL, 1=HIGH, 0=limpio
     """
+    # ── Subcomando 'diff' ─────────────────────────────────────────────────
+    if len(sys.argv) > 1 and sys.argv[1] == "diff":
+        _cmd_diff(sys.argv[2:])
+        return
+
     parser = build_parser()
     args   = parser.parse_args()
 
     console = Console()
     print_banner(console)
+
+    # ── Subcomando --list-tools ───────────────────────────────────────────
+    if getattr(args, "list_tools", False):
+        tool_dir = Path(getattr(args, "tool_dir", None) or Path(__file__).parent)
+        _cmd_list_tools(tool_dir, console)
+        sys.exit(0)
 
     # Validar que se ha proporcionado al menos un objetivo
     has_target = any([
