@@ -53,6 +53,11 @@ from typing import Callable, Dict, List, Optional
 import math
 from urllib.parse import urlparse
 
+try:
+    import yaml  # pyyaml — requerido para --config (pipelines YAML)
+except ImportError:
+    yaml = None  # type: ignore[assignment]
+
 from rich.columns import Columns
 from rich.console import Console
 from rich.live import Live
@@ -81,7 +86,7 @@ from vampsec_report import (
 # Constantes
 # ---------------------------------------------------------------------------
 
-VERSION   = "2.1"
+VERSION   = "2.2"
 TOOL_NAME = "vamp-orchestrator"
 AUTHOR    = "© VampSecure Studios — VampSecure Labs Security Research Division"
 
@@ -1710,6 +1715,102 @@ tr:hover td{{background:#0f0f1e}}
 
 
 # ---------------------------------------------------------------------------
+# Configuración de pipeline YAML (--config)
+# ---------------------------------------------------------------------------
+
+def load_pipeline_config(yaml_file: str) -> List[Tuple[str, List[str]]]:
+    """
+    Carga y valida un fichero de pipeline YAML para el orquestador.
+
+    Formato de ejemplo
+    ------------------
+    pipeline:
+      name: audit-ejemplo
+      target: ejemplo.com
+      tools:
+        - name: recon
+          args: []
+        - name: ssl
+          args: []
+      output:
+        format: html
+        file: informe_{{date}}.html
+      stop_on_critical: true
+
+    Parámetros
+    ----------
+    yaml_file : Ruta al fichero YAML del pipeline
+
+    Devuelve
+    --------
+    Lista ordenada de tuplas (nombre_herramienta, args_extra) según
+    el orden definido en el YAML. El argumento --target de la CLI
+    tiene prioridad sobre el target del YAML.
+
+    Excepciones
+    -----------
+    SystemExit si pyyaml no está instalado, el fichero no existe o
+    el YAML es inválido (pipeline.tools vacío o ausente).
+    """
+    if yaml is None:
+        print(
+            "Error: pyyaml no está instalado. "
+            "Instálalo con: pip install pyyaml>=6.0",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    try:
+        with open(yaml_file, "r", encoding="utf-8") as fh:
+            config = yaml.safe_load(fh)
+    except FileNotFoundError:
+        print(f"Error: fichero de pipeline no encontrado: {yaml_file}", file=sys.stderr)
+        sys.exit(1)
+    except yaml.YAMLError as exc:
+        print(f"Error al parsear el YAML de pipeline: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if not isinstance(config, dict) or "pipeline" not in config:
+        print(
+            "Error: el YAML de pipeline debe tener una clave raíz 'pipeline'.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    pipeline = config["pipeline"]
+    tools_raw = pipeline.get("tools")
+
+    if not tools_raw or not isinstance(tools_raw, list):
+        print(
+            "Error: pipeline.tools debe ser una lista no vacía de herramientas.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    resultado: List[Tuple[str, List[str]]] = []
+    for entrada in tools_raw:
+        if isinstance(entrada, dict):
+            nombre = str(entrada.get("name", "")).strip()
+            args_extra = list(entrada.get("args") or [])
+        elif isinstance(entrada, str):
+            nombre = entrada.strip()
+            args_extra = []
+        else:
+            continue
+        if nombre:
+            resultado.append((nombre, args_extra))
+
+    if not resultado:
+        print(
+            "Error: pipeline.tools no contiene ninguna herramienta válida.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    return resultado
+
+
+# ---------------------------------------------------------------------------
 # Banner
 # ---------------------------------------------------------------------------
 
@@ -1743,6 +1844,20 @@ def build_parser() -> argparse.ArgumentParser:
             f"  {TOOL_NAME} -u https://ejemplo.com -d ejemplo.com --parallel\n"
             f"  {TOOL_NAME} -d ejemplo.com --tools recon,ssl,mail --json out.json\n"
             f"  {TOOL_NAME} -p /path/al/proyecto --tools secrets\n"
+        ),
+    )
+
+    # Pipeline YAML
+    pip = p.add_argument_group("Pipeline YAML (--config)")
+    pip.add_argument(
+        "--config",
+        metavar="YAML_FILE",
+        default=None,
+        help=(
+            "Fichero YAML con la definición del pipeline de herramientas. "
+            "Si se indica, el pipeline del YAML define las herramientas a ejecutar "
+            "en orden. --target tiene prioridad sobre pipeline.target del YAML. "
+            "En pipeline.output.file se puede usar {{date}} → timestamp."
         ),
     )
 
@@ -2420,6 +2535,48 @@ def main() -> None:
         _cmd_list_tools(tool_dir, console)
         sys.exit(0)
 
+    # ── Modo pipeline YAML (--config) ────────────────────────────────────
+    config_file = getattr(args, "config", None)
+    if config_file:
+        pipeline_tools = load_pipeline_config(config_file)
+
+        # Leer configuración del YAML para rellenar args si no se proporcionaron
+        try:
+            if yaml is not None:
+                with open(config_file, "r", encoding="utf-8") as _fh:
+                    _cfg = yaml.safe_load(_fh)
+                _pipe = _cfg.get("pipeline", {}) if isinstance(_cfg, dict) else {}
+
+                # --target del CLI tiene prioridad; si no hay CLI target, usar YAML target
+                if not getattr(args, "domain", None) and not getattr(args, "url", None):
+                    yaml_target = _pipe.get("target", "")
+                    if yaml_target:
+                        args.domain = yaml_target  # se trata como dominio por defecto
+
+                # Fichero de salida con sustitución {{date}}
+                _output = _pipe.get("output") or {}
+                if isinstance(_output, dict) and _output.get("file"):
+                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    out_file = _output["file"].replace("{{date}}", ts)
+                    fmt = str(_output.get("format", "json")).lower()
+                    if fmt == "html" and not getattr(args, "html", None):
+                        args.html = out_file
+                    elif not getattr(args, "json", None):
+                        args.json = out_file
+
+                # stop_on_critical: si el YAML lo indica, se aplica tras la ejecución
+                _stop_on_critical = bool(_pipe.get("stop_on_critical", False))
+        except Exception:
+            _stop_on_critical = False
+
+        # Forzar lista de herramientas desde el pipeline YAML
+        args.tools = ",".join(nombre for nombre, _ in pipeline_tools)
+        console.print(
+            f"[bold]Pipeline YAML:[/] {config_file} → "
+            f"[cyan]{len(pipeline_tools)}[/] herramientas: "
+            f"{', '.join(n for n, _ in pipeline_tools)}"
+        )
+
     # Validar que se ha proporcionado al menos un objetivo
     has_target = any([
         getattr(args, "domain",       None),
@@ -2440,6 +2597,14 @@ def main() -> None:
 
     # Ejecutar orquestación
     result = orchestrate(args, console)
+
+    # Si el pipeline YAML especifica stop_on_critical y se encontraron hallazgos críticos
+    if config_file and _stop_on_critical:
+        if any(f.get("severity") == "CRITICAL" for f in result.all_findings):
+            console.print(
+                "\n[bold red]Pipeline detenido:[/] se encontraron hallazgos CRITICAL "
+                "y stop_on_critical está activado en el YAML."
+            )
 
     # Imprimir informe en consola
     print_unified_report(result, console)
