@@ -86,7 +86,7 @@ from vampsec_report import (
 # Constantes
 # ---------------------------------------------------------------------------
 
-VERSION   = "2.2"
+VERSION   = "2.3"
 TOOL_NAME = "vamp-orchestrator"
 AUTHOR    = "© VampSecure Studios — VampSecure Labs Security Research Division"
 
@@ -121,6 +121,65 @@ STATUS_ICON: Dict[str, str] = {
     "error":    "❌",
     "skipped":  "⏭️",
 }
+
+# ---------------------------------------------------------------------------
+# Notificaciones Telegram (v2.3)
+# ---------------------------------------------------------------------------
+
+def _notificar_telegram(bot_token: str, chat_id: str, mensaje: str) -> bool:
+    """
+    Envía un mensaje Telegram vía Bot API. Devuelve True si la petición tuvo éxito.
+    Usa únicamente módulos de la biblioteca estándar (urllib.request).
+    """
+    import urllib.request as _ureq
+    try:
+        url  = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        data = json.dumps({
+            "chat_id":    chat_id,
+            "text":       mensaje,
+            "parse_mode": "HTML",
+        }).encode()
+        req = _ureq.Request(
+            url, data=data,
+            headers={"Content-Type": "application/json"},
+        )
+        with _ureq.urlopen(req, timeout=10) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+def _leer_config_telegram() -> tuple:
+    """
+    Lee token y chat_id desde ~/.config/vampsec/config.toml.
+    Solo parsea la sección [orchestrator] con regex, sin dependencias extra.
+    Retorna (token, chat_id) — cadenas vacías si no está configurado.
+    """
+    import re as _re
+    config_path = Path.home() / ".config" / "vampsec" / "config.toml"
+    if not config_path.exists():
+        return "", ""
+    try:
+        texto    = config_path.read_text(encoding="utf-8")
+        en_orch  = False
+        token    = ""
+        chat_id  = ""
+        for linea in texto.splitlines():
+            ls = linea.strip()
+            if ls.startswith("["):
+                en_orch = ls == "[orchestrator]"
+                continue
+            if en_orch:
+                m = _re.match(r'telegram_bot_token\s*=\s*["\'](.+)["\']', ls)
+                if m:
+                    token = m.group(1)
+                m = _re.match(r'telegram_chat_id\s*=\s*["\'](.+)["\']', ls)
+                if m:
+                    chat_id = m.group(1)
+        return token, chat_id
+    except Exception:
+        return "", ""
+
 
 # ---------------------------------------------------------------------------
 # Catálogo de herramientas VSL
@@ -1915,6 +1974,13 @@ def build_parser() -> argparse.ArgumentParser:
     out.add_argument("--html", metavar="FICHERO",
                      help="Guardar informe HTML unificado dark-theme")
 
+    # Notificaciones Telegram (v2.3)
+    notif = p.add_argument_group("Notificaciones Telegram")
+    notif.add_argument("--telegram-token", metavar="TOKEN", dest="telegram_token",
+                       help="Bot token Telegram para notificación al finalizar el scan")
+    notif.add_argument("--telegram-chat",  metavar="CHAT_ID", dest="telegram_chat",
+                       help="Chat ID Telegram (usuario o grupo)")
+
     add_report_args(p)
     return p
 
@@ -2655,6 +2721,38 @@ def main() -> None:
                 console.print(f"[green]✔[/] Informe cliente PDF guardado en [bold]{report_pdf}[/]")
             except RuntimeError as e:
                 console.print(f"[yellow]⚠[/] PDF no generado: {e}")
+
+    # ── Notificación Telegram al finalizar (v2.3) ─────────────────────────
+    _tg_token = getattr(args, "telegram_token", None) or ""
+    _tg_chat  = getattr(args, "telegram_chat",  None) or ""
+    if not (_tg_token and _tg_chat):
+        _tg_token, _tg_chat = _leer_config_telegram()
+
+    if _tg_token and _tg_chat:
+        _objetivo = (
+            getattr(args, "domain",       None) or
+            getattr(args, "url",          None) or
+            getattr(args, "host",         None) or
+            "—"
+        )
+        _num_tools    = len(result.tools_run)
+        _num_findings = len(result.all_findings)
+        _num_critical = sum(1 for f in result.all_findings if f.get("severity") == "CRITICAL")
+        _num_high     = sum(1 for f in result.all_findings if f.get("severity") == "HIGH")
+        _ruta_informe = json_path or html_path or "—"
+
+        _resumen = (
+            f"<b>🔍 VampOrchestrator — Scan completado</b>\n"
+            f"Objetivo: {_objetivo}\n"
+            f"Herramientas: {_num_tools}\n"
+            f"Hallazgos: {_num_findings} ({_num_critical} CRITICAL, {_num_high} HIGH)\n"
+            f"Informe: {_ruta_informe}"
+        )
+        _ok = _notificar_telegram(_tg_token, _tg_chat, _resumen)
+        if _ok:
+            console.print("[dim]✉ Notificación Telegram enviada.[/]")
+        else:
+            console.print("[yellow]⚠ No se pudo enviar la notificación Telegram.[/]")
 
     # ── Código de salida ───────────────────────────────────────────────────
     has_critical = any(f.get("severity") == "CRITICAL" for f in result.all_findings)
