@@ -1,5 +1,6 @@
+<!-- © VampSecure Studios — VampSecure Labs Security Research Division -->
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2.0-crimson?style=flat-square" />
+  <img src="https://img.shields.io/badge/version-2.2-crimson?style=flat-square" />
   <img src="https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python&logoColor=white" />
   <img src="https://img.shields.io/badge/tools-16%20VSL%20slots-teal?style=flat-square" />
   <img src="https://img.shields.io/badge/VampSecure_Labs-Security_Research-8b0000?style=flat-square" />
@@ -27,7 +28,7 @@ Each tool result is parsed by a dedicated extractor, normalized to the VSL findi
 - **Logarithmic risk scoring**: `score = 100 × (1 − e^(−raw/75))` — differentiates engagements with 4 vs. 20 critical findings instead of saturating at the same value
 - Dedicated extractor for `vamp-log-analyzer` preserving MITRE ATT&CK fields (`mitre_tactic`, `mitre_technique`, `event_count`)
 - Auto-detection of Docker daemon and `kubectl` availability for containerized target selection
-- Unified JSON (`schema_version: 2.0`) and HTML reporting
+- Unified JSON (`schema_version: 2.2`) and HTML reporting
 - Custom tool path and Python interpreter configuration for virtual environment isolation
 
 ---
@@ -48,6 +49,13 @@ pip install -r requirements.txt
 ---
 
 ## Installation
+
+
+```bash
+pip install vamp-orchestrator
+# o con Homebrew:
+brew install vampsecure-labs/labs/vamp-orchestrator
+```
 
 ```bash
 git clone https://github.com/Vampsecure-Labs/vamp-orchestrator.git
@@ -142,7 +150,7 @@ python vamp_orchestrator.py --cve CVE-2024-21762 CVE-2023-27997 CVE-2022-40684 \
 | Format | How to enable | Description |
 |--------|---------------|-------------|
 | Console | Default | Rich execution log with per-tool status, finding counts, and composite score |
-| JSON | `--json FILE` | Deduplicated unified findings (schema_version 2.0) |
+| JSON | `--json FILE` | Deduplicated unified findings (schema_version 2.2) |
 | HTML | `--html FILE` | Standalone consolidated dark-theme report |
 
 ---
@@ -194,7 +202,7 @@ Duplicate findings (same severity + title + affected host) are merged and counte
 
 ---
 
-## Tool Catalog (v2.0)
+## Tool Catalog (v2.2)
 
 | Slot | Script | Prefix | Trigger |
 |------|--------|--------|---------|
@@ -237,3 +245,8 @@ Duplicate findings (same severity + title + affected host) are merged and counte
   © VampSecure Studios — VampSecure Labs Security Research Division<br/>
   For authorized security assessments only. Unauthorized use is prohibited.
 </p>
+
+---
+
+## Versión
+v2.2 — VampSecure Labs Security Research Division
