@@ -49,7 +49,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from html import escape as _he
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 import math
 from urllib.parse import urlparse
 
@@ -58,7 +58,6 @@ try:
 except ImportError:
     yaml = None  # type: ignore[assignment]
 
-from rich.columns import Columns
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
@@ -945,7 +944,7 @@ def extract_findings(tool_name: str, json_data: dict) -> List[dict]:
     extractor = _EXTRACTORS.get(tool_name, _extract_generic)
     try:
         findings = extractor(json_data, prefix)
-    except Exception as exc:
+    except Exception:
         # Nunca abortar por un fallo de extracción; degradar silenciosamente
         findings = []
     # Inyectar el nombre de la herramienta en cada hallazgo
