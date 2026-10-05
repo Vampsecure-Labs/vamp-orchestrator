@@ -1,6 +1,6 @@
 <!-- © VampSecure Studios — VampSecure Labs Security Research Division -->
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2.2-crimson?style=flat-square" />
+  <img src="https://img.shields.io/badge/version-2.4-crimson?style=flat-square" />
   <img src="https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python&logoColor=white" />
   <img src="https://img.shields.io/badge/tools-16%20VSL%20slots-teal?style=flat-square" />
   <img src="https://img.shields.io/badge/VampSecure_Labs-Security_Research-8b0000?style=flat-square" />
@@ -250,4 +250,10 @@ Duplicate findings (same severity + title + affected host) are merged and counte
 ---
 
 ## Versión
-v2.2 — VampSecure Labs Security Research Division
+## Historial de versiones
+
+| Versión | Cambios principales |
+|---------|---------------------|
+| v2.4 | Playbooks built-in (`--playbook devops_audit\|cloud_posture`); 6 tools nuevas en VSL_TOOLS (azure, gcp, ci, iac, supply, cloud_posture) |
+| v2.3 | Notificaciones Telegram (bot_token + chat_id en ~/.config/vampsec/config.toml) |
+| v2.2 | Orquestador inicial: 19 tools, pipeline YAML (--config), diff, informe HTML/JSON |

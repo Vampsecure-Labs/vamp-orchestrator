@@ -86,7 +86,7 @@ from vampsec_report import (
 # Constantes
 # ---------------------------------------------------------------------------
 
-VERSION   = "2.3"
+VERSION   = "2.4"
 TOOL_NAME = "vamp-orchestrator"
 AUTHOR    = "© VampSecure Studios — VampSecure Labs Security Research Division"
 
@@ -299,6 +299,50 @@ VSL_TOOLS: Dict[str, Dict] = {
         "prefix":    "RPT",
         "needs":     ["path"],
         "json_flag": "--json",
+    },
+    "azure":    {
+        "script":    "vamp_azure_audit.py",
+        "prefix":    "AZ",
+        "needs":     [],
+        "json_flag": "--json",
+    },
+    "gcp":      {
+        "script":    "vamp_gcp_audit.py",
+        "prefix":    "GCP",
+        "needs":     [],
+        "json_flag": "--json",
+    },
+    "ci":       {
+        "script":    "vamp_ci_audit.py",
+        "prefix":    "CI",
+        "needs":     ["path"],
+        "json_flag": "--json",
+    },
+    "iac":      {
+        "script":    "vamp_iac_audit.py",
+        "prefix":    "IAC",
+        "needs":     ["path"],
+        "json_flag": "--json",
+    },
+    "supply":   {
+        "script":    "vamp_supply_chain.py",
+        "prefix":    "SUP",
+        "needs":     ["path"],
+        "json_flag": "--json",
+    },
+}
+
+# Playbooks built-in v2.4 — conjuntos predefinidos de herramientas por tipo de engagement
+BUILTIN_PLAYBOOKS: Dict[str, Dict] = {
+    "devops_audit": {
+        "descripcion": "Auditoría DevSecOps: pipeline CI, IaC y supply chain",
+        "tools":       ["ci", "iac", "supply"],
+        "needs":       ["path"],
+    },
+    "cloud_posture": {
+        "descripcion": "Postura cloud: IaC, Azure, GCP y enumeración de exposición pública",
+        "tools":       ["iac", "azure", "gcp", "cloud"],
+        "needs":       ["path"],
     },
 }
 
@@ -1906,8 +1950,8 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    # Pipeline YAML
-    pip = p.add_argument_group("Pipeline YAML (--config)")
+    # Pipeline YAML y playbooks built-in
+    pip = p.add_argument_group("Pipeline YAML (--config) y playbooks (--playbook)")
     pip.add_argument(
         "--config",
         metavar="YAML_FILE",
@@ -1917,6 +1961,19 @@ def build_parser() -> argparse.ArgumentParser:
             "Si se indica, el pipeline del YAML define las herramientas a ejecutar "
             "en orden. --target tiene prioridad sobre pipeline.target del YAML. "
             "En pipeline.output.file se puede usar {{date}} → timestamp."
+        ),
+    )
+    pip.add_argument(
+        "--playbook",
+        metavar="NOMBRE",
+        default=None,
+        choices=list(BUILTIN_PLAYBOOKS.keys()),
+        help=(
+            "Playbook built-in predefinido. Opciones: "
+            + ", ".join(
+                f"{k} ({v['descripcion']})"
+                for k, v in BUILTIN_PLAYBOOKS.items()
+            )
         ),
     )
 
@@ -2600,6 +2657,17 @@ def main() -> None:
         tool_dir = Path(getattr(args, "tool_dir", None) or Path(__file__).parent)
         _cmd_list_tools(tool_dir, console)
         sys.exit(0)
+
+    # ── Modo playbook built-in (--playbook) ──────────────────────────────
+    playbook_name = getattr(args, "playbook", None)
+    if playbook_name:
+        pb = BUILTIN_PLAYBOOKS[playbook_name]
+        args.tools = ",".join(pb["tools"])
+        console.print(
+            f"[bold]Playbook:[/] {playbook_name}  "
+            f"[dim]({pb['descripcion']})[/dim]  → "
+            f"[cyan]{len(pb['tools'])}[/] herramientas: {', '.join(pb['tools'])}"
+        )
 
     # ── Modo pipeline YAML (--config) ────────────────────────────────────
     config_file = getattr(args, "config", None)
