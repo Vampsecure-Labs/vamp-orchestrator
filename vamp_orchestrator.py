@@ -85,7 +85,7 @@ from vampsec_report import (
 # Constantes
 # ---------------------------------------------------------------------------
 
-VERSION   = "2.4"
+VERSION   = "2.5"
 TOOL_NAME = "vamp-orchestrator"
 AUTHOR    = "© VampSecure Studios — VampSecure Labs Security Research Division"
 
@@ -329,6 +329,25 @@ VSL_TOOLS: Dict[str, Dict] = {
         "needs":     ["path"],
         "json_flag": "--json",
     },
+    # F4 tools — mobile/WAF/Windows (oct 2026)
+    "mobile":   {
+        "script":    "vamp_mobile_audit.py",
+        "prefix":    "MOBILE",
+        "needs":     ["path"],
+        "json_flag": "--json",
+    },
+    "waf":      {
+        "script":    "vamp_waf_bypass.py",
+        "prefix":    "WAF",
+        "needs":     ["url"],
+        "json_flag": "--json",
+    },
+    "windows":  {
+        "script":    "vamp_windows_audit.py",
+        "prefix":    "WIN",
+        "needs":     ["path"],
+        "json_flag": "--json",
+    },
 }
 
 # Playbooks built-in v2.4 — conjuntos predefinidos de herramientas por tipo de engagement
@@ -342,6 +361,11 @@ BUILTIN_PLAYBOOKS: Dict[str, Dict] = {
         "descripcion": "Postura cloud: IaC, Azure, GCP y enumeración de exposición pública",
         "tools":       ["iac", "azure", "gcp", "cloud"],
         "needs":       ["path"],
+    },
+    "endpoint_hardening": {
+        "descripcion": "Hardening de endpoints: Windows CIS + WAF evasion test",
+        "tools":       ["windows", "waf"],
+        "needs":       ["path", "url"],
     },
 }
 
