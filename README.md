@@ -226,6 +226,97 @@ Duplicate findings (same severity + title + affected host) are merged and counte
 
 ---
 
+## Sample Output
+
+```bash
+$ python vamp_orchestrator.py -d example.com \
+    --log-dir /var/log/nginx \
+    --parallel --max-parallel 4 \
+    --json assessment.json --html report.html
+```
+
+```
+╭──────────────────────────────────────────────────────────────────────────────╮
+│  vamp-orchestrator v2.4 · VampSecure Labs Security Research Division         │
+│  Target: example.com  ·  Log dir: /var/log/nginx  ·  Mode: parallel (4)     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+Auto-selecting tools for objectives: domain + log-dir
+  Tools selected: recon, ssl, http, mail, cloud, takeover, forensic
+
+[1/7] vamp-passive-recon       running …  ✓  3 findings (1 HIGH, 2 MEDIUM)                4.2s
+[2/7] vamp-ssl-audit           running …  ✓  2 findings (1 HIGH, 1 LOW)                   1.8s
+[3/7] vamp-http-audit          running …  ✓  5 findings (2 HIGH, 3 MEDIUM)               3.1s
+[4/7] vamp-mail-audit          running …  ✓  1 finding  (1 MEDIUM)                        1.3s
+[5/7] vamp-cloud-enum          running …  ✓  0 findings                                   2.7s
+[6/7] vamp-subdomain-takeover  running …  ✓  1 finding  (1 CRITICAL)                      5.6s
+[7/7] vamp-log-analyzer        running …  ✓  4 findings (1 CRITICAL, 2 HIGH, 1 MEDIUM)   12.4s
+
+Deduplication: 16 raw findings → 15 unique (1 merged across tools)
+
+╭────────────────────────────── Unified Findings ──────────────────────────────╮
+│ ID         │ Tool       │ Sev.      │ Title                                   │
+│ SDT-007    │ takeover   │ 💀 CRIT   │ Subdomain takeover: cdn.example.com     │
+│ FORA-001   │ forensic   │ 💀 CRIT   │ Brute force — 2.847 failed logins       │
+│ HTTP-019   │ http       │ 🔴 HIGH   │ Missing Content-Security-Policy         │
+│ RECON-003  │ recon      │ 🔴 HIGH   │ GitHub dork: .env file exposed          │
+│ SSL-002    │ ssl        │ 🔴 HIGH   │ TLS 1.0 enabled                         │
+│ FORA-009   │ forensic   │ 🔴 HIGH   │ Reconnaissance scan pattern             │
+│ …          │ …          │ …         │ …                                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+Risk score: raw=185  →  score=91/100  [Critical]
+
+Unified JSON  → assessment.json
+HTML report   → report.html
+Total time:     31.1 s
+```
+
+---
+
+## Why vamp-orchestrator vs. DefectDojo · Plextrac
+
+| Capacidad | vamp-orchestrator | DefectDojo | Plextrac |
+|---|---|---|---|
+| Auto-selección de tools por objetivo | ✅ | ❌ (importación manual) | ❌ |
+| Ejecuta tools VSL de forma nativa | ✅ | ❌ (solo ingesta) | ❌ |
+| Deduplicación cross-tool | ✅ | ✅ | ✅ |
+| Scoring logarítmico (no satura con muchos findings) | ✅ | ❌ | ❌ |
+| Preservación de MITRE ATT&CK (FORA-NNN) | ✅ | ✅ | ✅ |
+| Self-hosted, sin APIs externas | ✅ | ✅ | ❌ (SaaS) |
+| CLI de un único comando | ✅ | ❌ (interfaz web) | ❌ (interfaz web) |
+| Open source / AGPL | ✅ | ✅ | ❌ (comercial) |
+
+- Ejecuta todo el toolkit VSL en un único comando sin importar ficheros manualmente ni abrir un panel web.
+- La selección automática de herramientas por objetivo garantiza cobertura uniforme entre engagements y elimina errores de configuración.
+- La deduplicación cross-tool evita que el mismo hallazgo aparezca varias veces por haber sido detectado por dos herramientas distintas sobre el mismo host.
+- El scoring logarítmico diferencia un objetivo con 1 CRITICAL de uno con 8, en lugar de saturar ambos al mismo valor máximo.
+
+---
+
+## Orchestration Coverage
+
+| Tool slot | Herramienta VSL | Tipo de findings que agrega | Trigger |
+|---|---|---|---|
+| `recon` | vamp-passive-recon | OSINT, subdominios, headers HTTP, Shodan CVEs | `-d` dominio |
+| `ssl` | vamp-ssl-audit | Certificados, protocolos TLS/SSL, cipher suites | `-H` host / `-d` |
+| `http` | vamp-http-audit | Cabeceras de seguridad HTTP, WAF, redirecciones inseguras | `-u` / `-d` |
+| `wp` | vamp-wp2shell-audit | Plugins WordPress vulnerables, usuarios expuestos | `-u` / `-d` |
+| `secrets` | vamp-secrets-scanner | Credenciales hardcodeadas, tokens, claves privadas | `-p` ruta |
+| `forensic` | vamp-log-analyzer | 25 detectores MITRE ATT&CK en logs (brute force, RCE, exfil…) | `--log-dir` |
+| `takeover` | vamp-subdomain-takeover | Subdominios huérfanos (CNAME → servicio externo activo) | `-d` |
+| `k8s` | vamp-k8s-audit | RBAC, pods privilegiados, secretos en claro, network policies | `--k8s-context` |
+| `docker` | vamp-docker-audit | Daemons expuestos, imágenes sin firmar, capabilities peligrosas | auto (docker daemon) |
+| `cloud` | vamp-cloud-enum | Buckets S3/GCS/Azure públicos, assets cloud expuestos | `-d` |
+| `entropy` | vamp-entropy-watch | Ficheros con entropía anómala (ransomware, exfiltración) | `-p` ruta |
+| `llm` | vamp-llm-probe | Prompt injection, jailbreak, info disclosure en endpoints LLM | `--llm-endpoint` |
+| `mail` | vamp-mail-audit | SPF / DKIM / DMARC ausentes o mal configurados | `-d` |
+| `cve` | vamp-cve-oracle | Correlación CVE/CVSS por versión de software o biblioteca | `--cve` |
+| `fort` | vamp-forticheck | CVEs en dispositivos de red (Fortinet, Cisco, Palo Alto) | `-H` host |
+| `jwt` | vamp-jwt-audit | alg=none, claims inseguros, TTL excesivo, audience en tokens JWT | `--jwt` |
+
+---
+
 ## Part of VampSecure Labs Toolkit
 
 `vamp-orchestrator` is part of the **VampSecure Labs Security Research Toolkit**.
