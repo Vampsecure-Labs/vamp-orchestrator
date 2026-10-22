@@ -191,6 +191,44 @@ VSL_TOOLS: Dict[str, Dict] = {
         "needs":     ["domain"],
         "json_flag": "--json",
     },
+    # Herramientas con SUBCOMANDO: el guion no acepta los flags directamente,
+    # hay que anteponer el subcomando (vamp-ad-recon enum, api-probe scan...).
+    "ad_recon": {
+        "script":    "vamp_ad_recon.py",
+        "subcmd":    "enum",
+        "prefix":    "AD",
+        "needs":     ["host", "domain"],
+        "json_flag": "--json",
+        "accepts_meta": True,
+    },
+    "api_probe": {
+        "script":    "vamp_api_probe.py",
+        "subcmd":    "scan",
+        "prefix":    "API",
+        "needs":     ["url"],
+        "json_flag": "--json",
+        "accepts_meta": True,
+    },
+    "rag": {
+        "script":    "vamp_rag_audit.py",
+        "subcmd":    "probe",
+        "prefix":    "RAG",
+        "needs":     ["llm_endpoint"],
+        "json_flag": "--json",
+    },
+    "compliance": {
+        "script":    "vamp_compliance_check.py",
+        "prefix":    "CMP",
+        "needs":     ["path"],
+        "json_flag": "--json",
+        "extra_args": ["--frameworks", "all", "--only-failures"],
+    },
+    "oauth": {
+        "script":    "vamp_oauth_audit.py",
+        "prefix":    "OAUTH",
+        "needs":     ["host"],
+        "json_flag": "--json",
+    },
     "ssl":      {
         "script":    "vamp_ssl_audit.py",
         "prefix":    "SSL",
@@ -220,18 +258,21 @@ VSL_TOOLS: Dict[str, Dict] = {
         "prefix":    "JWT",
         "needs":     ["token"],
         "json_flag": "--json",
+        "accepts_meta": True,
     },
     "mail":     {
         "script":    "vamp_mail_audit.py",
         "prefix":    "MAIL",
         "needs":     ["domain"],
         "json_flag": "--json",
+        "accepts_meta": True,
     },
     "docker":   {
         "script":    "vamp_docker_audit.py",
         "prefix":    "DOCK",
         "needs":     [],
         "json_flag": "--json",
+        "extra_args": ["--include-stopped"],
     },
     "forensic": {
         "script":    "vamp_log_analyzer.py",
@@ -261,26 +302,25 @@ VSL_TOOLS: Dict[str, Dict] = {
         "script":    "vamp_subdomain_takeover.py",
         "prefix":    "SDT",
         "needs":     ["domain"],
-        "json_flag": "--json",
-    },
+        "json_flag": "-o",    },
     "k8s":      {
         "script":    "vamp_k8s_audit.py",
         "prefix":    "K8S",
         "needs":     [],
-        "json_flag": "--json",
+        "json_flag": ["--output", "{json}", "--format", "json"],
+        "extra_args": ["--audit-control-plane", "--audit-helm"],
     },
     "entropy":  {
         "script":    "vamp_entropy_watch.py",
         "prefix":    "ENT",
         "needs":     ["path"],
-        "json_flag": "--json",
+        "json_flag": "-o",        "subcmd": "scan",
     },
     "llm":      {
         "script":    "vamp_llm_probe.py",
         "prefix":    "LLM",
         "needs":     ["llm_endpoint"],
-        "json_flag": "--json",
-    },
+        "json_flag": "--output",    },
     "hunter":   {
         "script":    "vamp_log_hunter.py",
         "prefix":    "HUNT",
@@ -293,41 +333,28 @@ VSL_TOOLS: Dict[str, Dict] = {
         "needs":     [],
         "json_flag": "--json",
     },
-    "report":   {
-        "script":    "vamp_penreport.py",
-        "prefix":    "RPT",
-        "needs":     ["path"],
-        "json_flag": "--json",
-    },
-    "azure":    {
-        "script":    "vamp_azure_audit.py",
-        "prefix":    "AZ",
-        "needs":     [],
-        "json_flag": "--json",
-    },
-    "gcp":      {
-        "script":    "vamp_gcp_audit.py",
-        "prefix":    "GCP",
-        "needs":     [],
-        "json_flag": "--json",
-    },
+    # "report" (vamp-penreport) NO va aqui a proposito: no es un escaner, es un
+    # POST-PROCESADOR que toma como entrada los JSON de las demas herramientas
+    # (usage: vamp-penreport --client N INPUT [INPUT ...]). Registrarlo como
+    # herramienta de escaneo hacia que abortara con rc=2 en cada tirada.
+    # Se invoca aparte, despues, con los informes ya generados.
     "ci":       {
         "script":    "vamp_ci_audit.py",
         "prefix":    "CI",
         "needs":     ["path"],
-        "json_flag": "--json",
+        "json_flag": ["--output", "{json}", "--format", "json"],        "subcmd": "scan",
     },
     "iac":      {
         "script":    "vamp_iac_audit.py",
         "prefix":    "IAC",
         "needs":     ["path"],
-        "json_flag": "--json",
+        "json_flag": "--json",        "subcmd": "scan",
     },
     "supply":   {
         "script":    "vamp_supply_chain.py",
         "prefix":    "SUP",
         "needs":     ["path"],
-        "json_flag": "--json",
+        "json_flag": "--json",        "subcmd": "scan",
     },
     # F4 tools — mobile/WAF/Windows (oct 2026)
     "mobile":   {
@@ -904,6 +931,147 @@ def _extract_cve(data: dict, prefix: str) -> List[dict]:
     return out
 
 
+def _extract_ad_recon(data: dict, prefix: str) -> List[dict]:
+    """
+    Hallazgos de vamp_ad_recon (enum).
+
+    Esquema fuente: findings[].{severity, categoria, descripcion, evidencia,
+    recomendacion, objeto_afectado, ens_controls, mitre_attack}
+    """
+    out: List[dict] = []
+    for idx, f in enumerate(data.get("findings", []), 1):
+        if not isinstance(f, dict):
+            continue
+        marcos = f.get("ens_controls") or []
+        out.append(_make_finding(
+            prefix, idx,
+            severity    = f.get("severity", "MEDIUM"),
+            title       = f.get("nombre") or f.get("titulo") or f.get("id", "Hallazgo en AD"),
+            description = f.get("descripcion", ""),
+            evidence    = f.get("evidencia", ""),
+            affected    = f.get("objeto_afectado") or data.get("dominio", "—"),
+            remediation = f.get("recomendacion", ""),
+            tags        = ["ad", "identidad"] + ([str(x) for x in marcos] if marcos else []),
+        ))
+    return out
+
+
+def _extract_api_probe(data: dict, prefix: str) -> List[dict]:
+    """
+    Hallazgos de vamp_api_probe (scan).
+
+    Esquema fuente: findings[].{severity, title, description, evidence,
+    remediation, references, cvss, endpoint, owasp}
+    """
+    out: List[dict] = []
+    for idx, f in enumerate(data.get("findings", []), 1):
+        if not isinstance(f, dict):
+            continue
+        out.append(_make_finding(
+            prefix, idx,
+            severity    = f.get("severity", "MEDIUM"),
+            title       = f.get("title", "Hallazgo en la API"),
+            description = f.get("description", ""),
+            evidence    = f.get("evidence", ""),
+            # El activo es el ENDPOINT concreto, no la URL base: es lo que hace
+            # accionable el hallazgo.
+            affected    = f.get("endpoint") or data.get("target", "—"),
+            remediation = f.get("remediation", ""),
+            references  = f.get("references", []),
+            cvss        = f.get("cvss"),
+            tags        = ["api"] + ([f["owasp"]] if f.get("owasp") else []),
+        ))
+    return out
+
+
+def _extract_compliance(data: dict, prefix: str) -> List[dict]:
+    """
+    Hallazgos de vamp_compliance_check.
+
+    Esquema fuente (claves en castellano): findings[].{severidad, nombre,
+    descripcion, evidencia, recomendacion, control_id, marco, estado, ficheros}
+
+    Solo se emiten los controles que NO se cumplen: un control conforme no es un
+    hallazgo, y meterlo infla el informe del cliente.
+    """
+    out: List[dict] = []
+    idx = 1
+    for f in data.get("findings", []):
+        if not isinstance(f, dict):
+            continue
+        estado = str(f.get("estado", "")).upper()
+        if estado in ("PASS", "OK", "CUMPLE"):
+            continue
+        ctrl = " ".join(x for x in (f.get("marco"), f.get("control_id")) if x)
+        out.append(_make_finding(
+            prefix, idx,
+            severity    = f.get("severidad", "MEDIUM"),
+            title       = "[%s] %s" % (ctrl, f.get("nombre", "Control incumplido")) if ctrl
+                          else f.get("nombre", "Control incumplido"),
+            description = f.get("descripcion", ""),
+            evidence    = f.get("evidencia", ""),
+            affected    = ", ".join(f.get("ficheros") or []) or data.get("directorio", "—"),
+            remediation = f.get("recomendacion", ""),
+            tags        = ["cumplimiento"] + ([f["marco"]] if f.get("marco") else [])
+                          + ([f["categoria"]] if f.get("categoria") else []),
+        ))
+        idx += 1
+    return out
+
+
+def _extract_oauth(data: dict, prefix: str) -> List[dict]:
+    """
+    Hallazgos de vamp_oauth_audit.
+
+    Esquema fuente: hallazgos[].{severidad, descripcion, detalle, remediacion,
+    fase, id}  — el contenedor es `hallazgos`, no `findings`.
+    """
+    out: List[dict] = []
+    for idx, f in enumerate(data.get("hallazgos", []), 1):
+        if not isinstance(f, dict):
+            continue
+        out.append(_make_finding(
+            prefix, idx,
+            severity    = f.get("severidad", "MEDIUM"),
+            # Esta herramienta no emite `titulo`: `descripcion` ES el titular
+            # ("Sin endpoint de descubrimiento OIDC") y `detalle` el cuerpo.
+            title       = f.get("descripcion") or f.get("titulo") or f.get("id", "Hallazgo OAuth"),
+            description = f.get("detalle", ""),
+            evidence    = f.get("evidencia", f.get("detalle", "")),
+            affected    = data.get("target", "—"),
+            remediation = f.get("remediacion", ""),
+            tags        = ["oauth", "oidc"] + ([str(f["fase"])] if f.get("fase") else []),
+        ))
+    return out
+
+
+def _extract_rag(data: dict, prefix: str) -> List[dict]:
+    """
+    Hallazgos de vamp_rag_audit (probe).
+
+    Esquema fuente: resultados[].{id, severidad, titulo, estado, hallazgo{}}
+    Solo cuenta lo VULNERABLE: un check que pasa no es un hallazgo.
+    """
+    out: List[dict] = []
+    idx = 1
+    for r in data.get("resultados", []):
+        if not isinstance(r, dict) or str(r.get("estado", "")).upper() != "VULNERABLE":
+            continue
+        h = r.get("hallazgo") or {}
+        out.append(_make_finding(
+            prefix, idx,
+            severity    = r.get("severidad", "MEDIUM"),
+            title       = r.get("titulo") or r.get("id", "Hallazgo en el RAG"),
+            description = h.get("descripcion", h.get("description", "")),
+            evidence    = h.get("evidencia", h.get("evidence", "")),
+            affected    = data.get("endpoint", "—"),
+            remediation = h.get("recomendacion", h.get("remediation", "")),
+            tags        = ["rag", "ia", str(r.get("id", ""))],
+        ))
+        idx += 1
+    return out
+
+
 def _extract_generic(data: dict, prefix: str) -> List[dict]:
     """
     Extractor genérico de último recurso para herramientas sin extractor específico.
@@ -944,6 +1112,11 @@ _EXTRACTORS: Dict[str, Callable[[dict, str], List[dict]]] = {
     "wp":       _extract_wp,
     "secrets":  _extract_secrets,
     "jwt":      _extract_jwt,
+    "ad_recon": _extract_ad_recon,
+    "api_probe": _extract_api_probe,
+    "compliance": _extract_compliance,
+    "oauth":    _extract_oauth,
+    "rag":      _extract_rag,
     "mail":     _extract_mail,
     "docker":   _extract_docker,
     "forensic": _extract_forensic,
@@ -1153,6 +1326,10 @@ def build_command(tool_name: str, info: Dict, args: argparse.Namespace,
     """
     script = str(tool_dir / info["script"])
     cmd    = [python, script]
+    # El subcomando va justo detras del guion y antes de cualquier flag, o
+    # argparse rechaza la invocacion entera.
+    if info.get("subcmd"):
+        cmd.append(info["subcmd"])
     needs  = info["needs"]
     domain       = getattr(args, "domain",       None)
     url          = getattr(args, "url",          None)
@@ -1173,6 +1350,8 @@ def build_command(tool_name: str, info: Dict, args: argparse.Namespace,
             return None
         if tool_name in ("recon", "mail", "cloud", "takeover"):
             cmd.extend(["-d", target])
+        elif tool_name == "ad_recon":
+            cmd.extend(["--domain", target])
         elif tool_name == "ssl":
             cmd.extend(["-H", target])
         elif tool_name == "http":
@@ -1186,6 +1365,8 @@ def build_command(tool_name: str, info: Dict, args: argparse.Namespace,
             cmd.extend(["-u", target_url])
         elif tool_name == "wp":
             cmd.extend(["-t", target_url])
+        elif tool_name == "api_probe":
+            cmd.extend(["--url", target_url])
 
     if "host" in needs:
         target_host = host
@@ -1199,12 +1380,26 @@ def build_command(tool_name: str, info: Dict, args: argparse.Namespace,
             cmd.extend(["-H", target_host])
         elif tool_name == "fort":
             cmd.extend(["-t", target_host])
+        elif tool_name == "ad_recon":
+            cmd.extend(["--dc", target_host])
+            # El orquestador no transporta credenciales de dominio. Sin ellas la
+            # herramienta aborta pidiendo --user/--password, asi que se intenta
+            # la sesion anonima, que es el primer paso legitimo de reconocimiento
+            # (y cuyo exito ya es en si un hallazgo).
+            cmd.append("--null-session")
+        elif tool_name == "oauth":
+            cmd.extend(["--target", target_host])
 
     if "path" in needs:
         if not path:
             return None
         if tool_name == "secrets":
             # secrets-scanner acepta path como argumento posicional
+            cmd.append(path)
+        elif tool_name == "compliance":
+            cmd.extend(["--path", path])
+        elif tool_name == "ci":
+            # vamp-ci-audit scan toma la ruta como argumento posicional
             cmd.append(path)
         else:
             # entropy y otras herramientas usan --path
@@ -1235,8 +1430,46 @@ def build_command(tool_name: str, info: Dict, args: argparse.Namespace,
     if tool_name == "k8s" and k8s_context:
         cmd.extend(["--context", k8s_context])
 
-    # Flag de salida JSON
-    cmd.extend([info["json_flag"], json_out])
+    # Flags que esta herramienta lleva SIEMPRE: amplian cobertura sin contrapartida
+    # (p.ej. k8s audita tambien el plano de control y Helm). Lo que reduce alcance
+    # o relaja verificaciones NO va aqui: se pide explicitamente con --tool-arg.
+    cmd.extend(info.get("extra_args") or [])
+
+    # Metadatos del encargo para la portada de los informes que genera la propia
+    # herramienta. Los recibe el orquestador y se quedaban aqui: sus PDF/HTML
+    # salian sin decir de que auditoria eran.
+    if info.get("accepts_meta"):
+        for opcion, attr in (("--client", "client"), ("--engagement", "engagement"),
+                             ("--auditor", "auditor")):
+            valor = getattr(args, attr, None)
+            if valor:
+                cmd.extend([opcion, str(valor)])
+            elif opcion in (info.get("meta_obligatoria") or []):
+                # Hay herramientas que exigen el dato (vamp-penreport aborta con
+                # rc=2 sin --client). Se pone un marcador antes que no ejecutar.
+                cmd.extend([opcion, "(sin especificar)"])
+
+    # Pass-through: --tool-arg k8s:--delta=/ruta  ·  --tool-arg llm:--multi-turn
+    # Existe para no tener que tocar este registro cada vez que alguien necesita
+    # un flag concreto de una herramienta en un encargo concreto.
+    for spec in (getattr(args, "tool_arg", None) or []):
+        destino, _, resto = spec.partition(":")
+        if destino.strip() != tool_name or not resto:
+            continue
+        bandera, sep, valor = resto.partition("=")
+        cmd.append(bandera.strip())
+        if sep:
+            cmd.append(valor)
+
+    # Flag de salida JSON. Admite dos formas porque las herramientas no son
+    # uniformes: una cadena ("--json" -> "--json FICHERO") o una lista cuando
+    # hacen falta varios argumentos ("--output FICHERO --format json"), con
+    # {json} como marcador del fichero.
+    jf = info["json_flag"]
+    if isinstance(jf, (list, tuple)):
+        cmd.extend([json_out if x == "{json}" else x for x in jf])
+    else:
+        cmd.extend([jf, json_out])
     return cmd
 
 
@@ -1245,7 +1478,7 @@ def build_command(tool_name: str, info: Dict, args: argparse.Namespace,
 # ---------------------------------------------------------------------------
 
 def run_tool(tool_run: ToolRun, cmd: List[str], timeout: int,
-             console: Console) -> None:
+             console: Console, json_path: Optional[str] = None) -> None:
     """
     Ejecuta una herramienta VSL como subproceso y captura su JSON de salida.
 
@@ -1262,11 +1495,16 @@ def run_tool(tool_run: ToolRun, cmd: List[str], timeout: int,
         tool_run.returncode = result.returncode
         tool_run.end_time   = time.monotonic()
 
-        # El último argumento es el fichero JSON de salida
-        json_path = Path(cmd[-1])
-        if json_path.is_file():
+        # La ruta del JSON se recibe explicitamente. Antes se deducia de cmd[-1],
+        # lo que dejo de ser cierto en cuanto una herramienta necesito mas de un
+        # argumento de salida (k8s y ci usan "--output FICHERO --format json", y
+        # el ultimo argumento pasa a ser "json"): el orquestador buscaba un
+        # fichero llamado "json", no lo encontraba y daba la tirada por fallida
+        # aunque el informe estuviera escrito.
+        ruta = Path(json_path) if json_path else Path(cmd[-1])
+        if ruta.is_file():
             try:
-                data = json.loads(json_path.read_text(encoding="utf-8"))
+                data = json.loads(ruta.read_text(encoding="utf-8"))
                 findings = extract_findings(tool_run.name, data)
                 tool_run.findings       = findings
                 tool_run.findings_count = len(findings)
@@ -2042,6 +2280,9 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Máximo de herramientas simultáneas en modo paralelo (por defecto: 3)")
     exc.add_argument("--timeout", metavar="SEG", type=int, default=300,
                      help="Tiempo máximo por herramienta en segundos (por defecto: 300)")
+    exc.add_argument("--tool-arg", metavar="TOOL:FLAG[=VALOR]", action="append", default=[],
+                     help="Pasa un flag propio a una herramienta concreta. Repetible. "
+                          "Ej: --tool-arg k8s:--delta=/tmp/prev.json --tool-arg llm:--multi-turn")
     exc.add_argument("--tool-dir", metavar="DIR",
                      help="Directorio raíz de los scripts VSL (por defecto: directorio de este script)")
     exc.add_argument("--python", metavar="PATH", default=sys.executable,
@@ -2116,10 +2357,12 @@ def orchestrate(args: argparse.Namespace, console: Console) -> OrchestratorResul
     tmpdir   = tempfile.mkdtemp(prefix="vamp_orch_")
     tool_runs: List[ToolRun] = []
     commands: Dict[str, Optional[List[str]]] = {}
+    json_outs: Dict[str, str] = {}
 
     for name in selected:
         info     = VSL_TOOLS[name]
         json_out = os.path.join(tmpdir, f"{name}_out.json")
+        json_outs[name] = json_out
         cmd      = build_command(name, info, args, python, tool_dir, json_out)
         tr = ToolRun(name=name, script=info["script"])
         if cmd is None:
@@ -2151,7 +2394,7 @@ def orchestrate(args: argparse.Namespace, console: Console) -> OrchestratorResul
                 tr.status    = "skipped"
                 tr.error_msg = "Sin comando (objetivo insuficiente)"
             return
-        run_tool(tr, cmd, timeout, console)
+        run_tool(tr, cmd, timeout, console, json_path=json_outs.get(tr.name))
         _update_progress()
 
     with Live(
