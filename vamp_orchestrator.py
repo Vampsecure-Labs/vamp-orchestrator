@@ -327,12 +327,10 @@ VSL_TOOLS: Dict[str, Dict] = {
         "needs":     ["log_dir"],
         "json_flag": "--json",
     },
-    "arp":      {
-        "script":    "vamp_arp_sentinel.py",
-        "prefix":    "ARP",
-        "needs":     [],
-        "json_flag": "--json",
-    },
+    # "arp" (vamp-arp-sentinel) tampoco va aqui: es un MONITOR CONTINUO, no un
+    # escaneo puntual. Tras la fase de aprendizaje (--learn-time) se queda
+    # escuchando indefinidamente, asi que en una tirada con timeout solo puede
+    # acabar en "Timeout". Se usa aparte, como vigilancia.
     # "report" (vamp-penreport) NO va aqui a proposito: no es un escaner, es un
     # POST-PROCESADOR que toma como entrada los JSON de las demas herramientas
     # (usage: vamp-penreport --client N INPUT [INPUT ...]). Registrarlo como
