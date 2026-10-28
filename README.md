@@ -1,6 +1,6 @@
 <!-- © VampSecure Studios — VampSecure Labs Security Research Division -->
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2.6-crimson?style=flat-square" />
+  <img src="https://img.shields.io/badge/version-2.5-crimson?style=flat-square" />
   <img src="https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python&logoColor=white" />
   <img src="https://img.shields.io/badge/tools-16%20VSL%20slots-teal?style=flat-square" />
   <img src="https://img.shields.io/badge/VampSecure_Labs-Security_Research-8b0000?style=flat-square" />
@@ -239,7 +239,7 @@ $ python vamp_orchestrator.py -d example.com \
 
 ```
 ╭──────────────────────────────────────────────────────────────────────────────╮
-│  vamp-orchestrator v2.6 · VampSecure Labs Security Research Division         │
+│  vamp-orchestrator v2.5 · VampSecure Labs Security Research Division         │
 │  Target: example.com  ·  Log dir: /var/log/nginx  ·  Mode: parallel (4)     │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
