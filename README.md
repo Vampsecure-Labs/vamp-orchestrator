@@ -1,6 +1,6 @@
 <!-- © VampSecure Studios — VampSecure Labs Security Research Division -->
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2.6-crimson?style=flat-square" />
+  <img src="https://img.shields.io/badge/version-2.7-crimson?style=flat-square" />
   <img src="https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python&logoColor=white" />
   <img src="https://img.shields.io/badge/tools-16%20VSL%20slots-teal?style=flat-square" />
   <img src="https://img.shields.io/badge/VampSecure_Labs-Security_Research-8b0000?style=flat-square" />
@@ -239,7 +239,7 @@ $ python vamp_orchestrator.py -d example.com \
 
 ```
 ╭──────────────────────────────────────────────────────────────────────────────╮
-│  vamp-orchestrator v2.6 · VampSecure Labs Security Research Division         │
+│  vamp-orchestrator v2.7 · VampSecure Labs Security Research Division         │
 │  Target: example.com  ·  Log dir: /var/log/nginx  ·  Mode: parallel (4)     │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
@@ -339,7 +339,7 @@ Total time:     31.1 s
 
 | Version | Main changes |
 |---------|-------------|
-| v2.6 | Tool registry audit: fixed 9 entries that produced no output, registered 5 more tools, and added `--tool-arg` pass-through for per-engagement flags. |
+| v2.7 | Tool registry audit: fixed 9 entries that produced no output, registered 5 more tools, and added `--tool-arg` pass-through for per-engagement flags. |
 | v2.6 | Bilingual README (EN/ES) |
 | v2.5 | Mobile/waf/windows tool slots; endpoint_hardening playbook |
 | v2.4 | Built-in playbooks (`--playbook devops_audit\|cloud_posture`); 6 new tools in VSL_TOOLS (azure, gcp, ci, iac, supply, cloud_posture) |
@@ -632,7 +632,7 @@ Los hallazgos duplicados (misma severidad + título + host afectado) se fusionan
 
 | Versión | Cambios principales |
 |---------|---------------------|
-| v2.6 | Auditoría del registro de herramientas: corregidas 9 entradas sin salida, registradas 5 herramientas más y pass-through `--tool-arg` para flags por encargo. |
+| v2.7 | Auditoría del registro de herramientas: corregidas 9 entradas sin salida, registradas 5 herramientas más y pass-through `--tool-arg` para flags por encargo. |
 | v2.6 | README bilingüe (EN/ES) |
 | v2.5 | Slots mobile/waf/windows; playbook endpoint_hardening |
 | v2.4 | Playbooks integrados (`--playbook devops_audit\|cloud_posture`); 6 tools nuevas en VSL_TOOLS (azure, gcp, ci, iac, supply, cloud_posture) |
