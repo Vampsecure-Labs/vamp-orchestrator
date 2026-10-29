@@ -85,7 +85,7 @@ from vampsec_report import (
 # Constantes
 # ---------------------------------------------------------------------------
 
-VERSION   = "2.5"
+VERSION   = "2.6"
 TOOL_NAME = "vamp-orchestrator"
 AUTHOR    = "© VampSecure Studios — VampSecure Labs Security Research Division"
 
