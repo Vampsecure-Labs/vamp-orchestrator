@@ -392,6 +392,15 @@ VSL_TOOLS: Dict[str, Dict] = {
         "needs":     ["host"],
         "json_flag": "--json",
     },
+    # vamp-dast: escáner web DAST (binario Go del PATH, objetivo URL posicional).
+    # Su JSON lleva los hallazgos en la raíz → extractor genérico.
+    "dast":     {
+        "script":    "vamp-dast",
+        "binary":    True,
+        "prefix":    "DAST",
+        "needs":     ["url"],
+        "json_flag": "--json",
+    },
 }
 
 # Playbooks built-in v2.4 — conjuntos predefinidos de herramientas por tipo de engagement
@@ -1353,7 +1362,7 @@ def auto_select_tools(args: argparse.Namespace,
     if domain:
         selected.update(["recon", "ssl", "http", "wp", "mail", "cloud", "takeover"])
     if url:
-        selected.update(["http", "wp"])
+        selected.update(["http", "wp", "dast"])
         if not domain and not host:
             selected.update(["ssl", "recon"])
     if host:
@@ -1456,6 +1465,9 @@ def build_command(tool_name: str, info: Dict, args: argparse.Namespace,
             cmd.extend(["-t", target_url])
         elif tool_name == "api_probe":
             cmd.extend(["--url", target_url])
+        elif tool_name == "dast":
+            # vamp-dast toma la URL como argumento POSICIONAL.
+            cmd.append(target_url)
 
     if "host" in needs:
         target_host = host
