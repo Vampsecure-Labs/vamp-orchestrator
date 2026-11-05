@@ -461,6 +461,31 @@ class TestExtractFindings:
         findings = orch.extract_findings("ssl", data)
         assert findings[0].get("tool") == "ssl"
 
+    def test_netmap_extrae_puertos_y_so(self):
+        # vamp-netmap: puertos abiertos + SO, todo como hallazgos INFO (recon).
+        data = {"hosts": [{
+            "ip": "10.0.0.5",
+            "os": "Linux (2.6-6.x) — fingerprint (confianza alta)",
+            "tcp_sig": "ttl=64 ipid=0 opt=M,S,T,N,W",
+            "ports": [
+                {"port": 22, "state": "open", "service": "ssh", "version": "ssh OpenSSH_9.2"},
+                {"port": 81, "state": "closed", "service": "", "version": ""},
+            ],
+        }]}
+        findings = orch.extract_findings("netmap", data)
+        # 1 hallazgo de SO + 1 de puerto abierto (el cerrado no cuenta)
+        assert len(findings) == 2
+        assert all(f["severity"] == "INFO" for f in findings)
+        assert all(f.get("tool") == "netmap" for f in findings)
+        titles = " ".join(f["title"] for f in findings)
+        assert "22/tcp" in titles and "operativo" in titles.lower()
+
+    def test_netmap_modo_discovery(self):
+        data = {"mode": "discovery", "up": ["10.0.0.1", "10.0.0.2"]}
+        findings = orch.extract_findings("netmap", data)
+        assert len(findings) == 2
+        assert all("vivo" in f["title"].lower() for f in findings)
+
     def test_herramienta_desconocida_usa_extractor_generico(self):
         # Una herramienta sin extractor específico usa _extract_generic
         data = {"findings": [{"severity": "LOW", "title": "Hallazgo genérico",

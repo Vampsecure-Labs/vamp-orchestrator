@@ -373,6 +373,16 @@ VSL_TOOLS: Dict[str, Dict] = {
         "needs":     ["path"],
         "json_flag": "--json",
     },
+    # vamp-netmap: escáner de red soberano (Rust+ASM), NO es un script .py sino
+    # un BINARIO del PATH con objetivo POSICIONAL (IP/CIDR/hostname). "binary"
+    # cambia cómo se resuelve/ejecuta y cómo se comprueba su disponibilidad.
+    "netmap":   {
+        "script":    "vamp-netmap",   # nombre del binario (se resuelve con which)
+        "binary":    True,
+        "prefix":    "NETMAP",
+        "needs":     ["host"],
+        "json_flag": "--json",
+    },
 }
 
 # Playbooks built-in v2.4 — conjuntos predefinidos de herramientas por tipo de engagement
@@ -1070,6 +1080,66 @@ def _extract_rag(data: dict, prefix: str) -> List[dict]:
     return out
 
 
+def _extract_netmap(data: dict, prefix: str) -> List[dict]:
+    """
+    Extractor de vamp-netmap (escáner de red). Su JSON lista hosts con puertos
+    y, opcionalmente (-O), el SO inferido. Es RECON: todos los hallazgos son
+    informativos (INFO) — puertos abiertos, servicio/versión y SO.
+
+    Esquemas:
+      · Escaneo:   {"hosts":[{"ip","ttl?","tcp_sig?","os?","ports":[
+                      {"port","state","service","version"}]}]}
+      · Discovery: {"mode":"discovery","up":["ip", ...]}
+    """
+    out: List[dict] = []
+    idx = 1
+
+    # Modo descubrimiento (-sn / -PE): solo hosts vivos.
+    if data.get("mode") == "discovery":
+        for ip in data.get("up", []):
+            out.append(_make_finding(
+                prefix, idx, "INFO",
+                title       = f"Host vivo: {ip}",
+                description = "Respondió al descubrimiento de hosts (ping sweep / ICMP echo).",
+                affected    = str(ip),
+                tags        = ["recon", "host-discovery"],
+            ))
+            idx += 1
+        return out
+
+    for host in data.get("hosts", []):
+        ip = host.get("ip", "—")
+        os_desc = host.get("os")
+        if os_desc:
+            out.append(_make_finding(
+                prefix, idx, "INFO",
+                title       = f"Sistema operativo inferido: {ip}",
+                description = str(os_desc),
+                evidence    = str(host.get("tcp_sig", "")),
+                affected    = str(ip),
+                tags        = ["recon", "os-fingerprint"],
+            ))
+            idx += 1
+        for p in host.get("ports", []):
+            if p.get("state") != "open":
+                continue
+            port = p.get("port")
+            svc  = (p.get("service") or "").strip()
+            ver  = (p.get("version") or "").strip()
+            label = ver or svc
+            out.append(_make_finding(
+                prefix, idx, "INFO",
+                title       = f"Puerto abierto: {port}/tcp {svc}".strip(),
+                description = (f"Servicio/versión detectado: {label}" if label
+                              else "Puerto TCP abierto."),
+                evidence    = label,
+                affected    = f"{ip}:{port}",
+                tags        = ["recon", "open-port"],
+            ))
+            idx += 1
+    return out
+
+
 def _extract_generic(data: dict, prefix: str) -> List[dict]:
     """
     Extractor genérico de último recurso para herramientas sin extractor específico.
@@ -1125,6 +1195,7 @@ _EXTRACTORS: Dict[str, Callable[[dict, str], List[dict]]] = {
     "k8s":      _extract_generic,
     "entropy":  _extract_entropy,
     "llm":      _extract_generic,
+    "netmap":   _extract_netmap,
 }
 
 
@@ -1160,8 +1231,12 @@ def discover_tools(tool_dir: Path) -> Dict[str, bool]:
     """
     availability: Dict[str, bool] = {}
     for tool_name, info in VSL_TOOLS.items():
-        script = tool_dir / info["script"]
-        availability[tool_name] = script.is_file()
+        if info.get("binary"):
+            # Ejecutable del PATH (no un script en tool_dir).
+            availability[tool_name] = shutil.which(info["script"]) is not None
+        else:
+            script = tool_dir / info["script"]
+            availability[tool_name] = script.is_file()
     return availability
 
 
@@ -1273,7 +1348,9 @@ def auto_select_tools(args: argparse.Namespace,
         if not domain and not host:
             selected.update(["ssl", "recon"])
     if host:
-        selected.update(["ssl", "fort"])
+        selected.update(["ssl", "fort", "netmap"])
+    if domain:
+        selected.add("netmap")   # recon-red del host del dominio (resuelve el nombre)
     if path:
         selected.update(["secrets", "entropy"])
     if jwt:
@@ -1322,8 +1399,13 @@ def build_command(tool_name: str, info: Dict, args: argparse.Namespace,
 
     Retorna None si faltan argumentos obligatorios.
     """
-    script = str(tool_dir / info["script"])
-    cmd    = [python, script]
+    # Las herramientas nativas son scripts .py (se ejecutan con python); una
+    # entrada "binary" es un ejecutable del PATH (p.ej. vamp-netmap, Rust).
+    if info.get("binary"):
+        cmd = [shutil.which(info["script"]) or info["script"]]
+    else:
+        script = str(tool_dir / info["script"])
+        cmd    = [python, script]
     # El subcomando va justo detras del guion y antes de cualquier flag, o
     # argparse rechaza la invocacion entera.
     if info.get("subcmd"):
@@ -1387,6 +1469,9 @@ def build_command(tool_name: str, info: Dict, args: argparse.Namespace,
             cmd.append("--null-session")
         elif tool_name == "oauth":
             cmd.extend(["--target", target_host])
+        elif tool_name == "netmap":
+            # vamp-netmap toma el objetivo como argumento POSICIONAL.
+            cmd.append(target_host)
 
     if "path" in needs:
         if not path:
