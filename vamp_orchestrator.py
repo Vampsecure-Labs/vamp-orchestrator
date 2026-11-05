@@ -401,6 +401,15 @@ VSL_TOOLS: Dict[str, Dict] = {
         "needs":     ["url"],
         "json_flag": "--json",
     },
+    # vamp-ad-strike: recon/auditoría de Active Directory (binario Go del PATH,
+    # objetivo = host del DC posicional). JSON con findings en la raíz → genérico.
+    "ad_strike": {
+        "script":    "vamp-ad-strike",
+        "binary":    True,
+        "prefix":    "ADSTRIKE",
+        "needs":     ["host"],
+        "json_flag": "--json",
+    },
 }
 
 # Playbooks built-in v2.4 — conjuntos predefinidos de herramientas por tipo de engagement
@@ -1366,7 +1375,7 @@ def auto_select_tools(args: argparse.Namespace,
         if not domain and not host:
             selected.update(["ssl", "recon"])
     if host:
-        selected.update(["ssl", "fort", "netmap", "redis"])
+        selected.update(["ssl", "fort", "netmap", "redis", "ad_strike"])
     if domain:
         selected.add("netmap")   # recon-red del host del dominio (resuelve el nombre)
     if path:
@@ -1495,6 +1504,9 @@ def build_command(tool_name: str, info: Dict, args: argparse.Namespace,
             cmd.append(target_host)
         elif tool_name == "redis":
             # vamp-redis toma el objetivo (host[:puerto]) como POSICIONAL.
+            cmd.append(target_host)
+        elif tool_name == "ad_strike":
+            # vamp-ad-strike toma el host del DC como POSICIONAL.
             cmd.append(target_host)
 
     if "path" in needs:
