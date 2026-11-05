@@ -383,6 +383,15 @@ VSL_TOOLS: Dict[str, Dict] = {
         "needs":     ["host"],
         "json_flag": "--json",
     },
+    # vamp-redis: auditor de seguridad de Redis (Python, script del arsenal).
+    # Su JSON lleva los hallazgos en la raíz (`findings`), así que el extractor
+    # genérico ya los normaliza; no necesita extractor propio.
+    "redis":    {
+        "script":    "vamp_redis_audit.py",
+        "prefix":    "REDIS",
+        "needs":     ["host"],
+        "json_flag": "--json",
+    },
 }
 
 # Playbooks built-in v2.4 — conjuntos predefinidos de herramientas por tipo de engagement
@@ -1348,7 +1357,7 @@ def auto_select_tools(args: argparse.Namespace,
         if not domain and not host:
             selected.update(["ssl", "recon"])
     if host:
-        selected.update(["ssl", "fort", "netmap"])
+        selected.update(["ssl", "fort", "netmap", "redis"])
     if domain:
         selected.add("netmap")   # recon-red del host del dominio (resuelve el nombre)
     if path:
@@ -1471,6 +1480,9 @@ def build_command(tool_name: str, info: Dict, args: argparse.Namespace,
             cmd.extend(["--target", target_host])
         elif tool_name == "netmap":
             # vamp-netmap toma el objetivo como argumento POSICIONAL.
+            cmd.append(target_host)
+        elif tool_name == "redis":
+            # vamp-redis toma el objetivo (host[:puerto]) como POSICIONAL.
             cmd.append(target_host)
 
     if "path" in needs:
